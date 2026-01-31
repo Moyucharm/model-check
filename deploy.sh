@@ -15,7 +15,7 @@
 #
 # 示例:
 #   ./deploy.sh --local        # 最简单，全部本地运行
-#   ./deploy.sh --cloud-db     # 使用 Supabase/Neon 等云数据库
+#   ./deploy.sh --cloud-db     # 使用 Supabase/Neon/TiDB 等云数据库
 #   ./deploy.sh --cloud        # 数据库和 Redis 都用云端
 
 set -e
@@ -59,7 +59,8 @@ show_help() {
     echo "  --help        显示此帮助信息"
     echo ""
     echo "云服务推荐:"
-    echo "  PostgreSQL: Supabase (免费), Neon (免费), Railway"
+    echo "  PostgreSQL: Supabase (免费), Neon (免费)"
+    echo "  TiDB:       TiDB Cloud (免费额度)"
     echo "  Redis:      Upstash (免费), Redis Cloud"
     exit 0
 }

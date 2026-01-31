@@ -4,6 +4,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)](https://www.typescriptlang.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)](https://www.postgresql.org/)
+[![TiDB](https://img.shields.io/badge/TiDB-Supported-red)](https://www.pingcap.com/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED)](https://www.docker.com/)
 
 API 渠道可用性检测系统 - 实时监控多个 API 渠道的模型可用性状态。
@@ -15,6 +16,7 @@ API 渠道可用性检测系统 - 实时监控多个 API 渠道的模型可用�
 - **定时任务** - 可配置的周期性检测（默认每 6 小时）
 - **数据清理** - 自动清理过期日志（默认保留 7 天）
 - **渠道管理** - 支持 WebDAV 同步、批量导入导出
+- **多数据库** - 支持 PostgreSQL（默认）、TiDB、MySQL
 - **深色模式** - 支持浅色/深色主题切换
 - **一键部署** - Docker 一键部署，自动安装 Docker
 
@@ -49,7 +51,7 @@ chmod +x deploy.sh && ./deploy.sh
 | 模式 | 命令 | 说明 |
 |------|------|------|
 | 本地模式 | `./deploy.sh` | PostgreSQL + Redis 本地运行（默认） |
-| 云数据库 | `./deploy.sh --cloud-db` | 使用 Supabase/Neon 云数据库 |
+| 云数据库 | `./deploy.sh --cloud-db` | 使用 Supabase/Neon/TiDB 云数据库 |
 | 云 Redis | `./deploy.sh --cloud-redis` | 使用 Upstash 云 Redis |
 | 全云端 | `./deploy.sh --cloud` | 数据库和 Redis 都使用云服务 |
 
@@ -71,6 +73,42 @@ docker compose up -d
 docker compose exec app npx prisma db push
 ```
 
+## 数据库支持
+
+### PostgreSQL（默认）
+
+Docker 部署默认使用 PostgreSQL 16，无需额外配置。
+
+**云服务推荐：**
+- [Supabase](https://supabase.com) - 免费额度充足
+- [Neon](https://neon.tech) - Serverless PostgreSQL
+
+```bash
+DOCKER_DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres"
+```
+
+### TiDB Cloud
+
+TiDB 是 MySQL 兼容的分布式数据库，适合大规模部署。
+
+**使用步骤：**
+1. 切换 Schema：
+   ```bash
+   cp prisma/schema.mysql.prisma prisma/schema.prisma
+   ```
+2. 配置连接串：
+   ```bash
+   DOCKER_DATABASE_URL="mysql://user:password@gateway01.xx.tidbcloud.com:4000/newapi_monitor?sslaccept=strict"
+   ```
+3. 重新构建：
+   ```bash
+   docker compose up -d --build
+   ```
+
+### MySQL
+
+本地 MySQL 或其他 MySQL 兼容数据库同样支持，切换方式与 TiDB 相同。
+
 ## 环境变量
 
 ### 必须配置
@@ -89,20 +127,6 @@ docker compose exec app npx prisma db push
 | `CRON_SCHEDULE` | 检测周期（cron 格式） | `0 */6 * * *` |
 | `LOG_RETENTION_DAYS` | 日志保留天数 | `7` |
 | `APP_PORT` | 应用端口 | `3000` |
-
-## 云服务配置
-
-### 云数据库（PostgreSQL）
-
-**Supabase（推荐）**
-```bash
-DOCKER_DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres"
-```
-
-**Neon**
-```bash
-DOCKER_DATABASE_URL="postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require"
-```
 
 ### 云 Redis
 
@@ -143,8 +167,8 @@ newapi-model-check/
 │       ├── queue/            # BullMQ 队列
 │       └── scheduler/        # Cron 调度
 ├── prisma/
-│   ├── schema.prisma         # PostgreSQL Schema
-│   └── schema.mysql.prisma   # MySQL Schema（备用）
+│   ├── schema.prisma         # PostgreSQL Schema（默认）
+│   └── schema.mysql.prisma   # MySQL/TiDB Schema
 ├── docker-compose.yml
 ├── Dockerfile
 ├── deploy.sh                  # Linux/macOS 部署脚本
@@ -157,7 +181,7 @@ newapi-model-check/
 |------|------|
 | 框架 | Next.js 16 (App Router) |
 | 语言 | TypeScript 5 |
-| 数据库 | PostgreSQL 16 + Prisma ORM |
+| 数据库 | PostgreSQL / TiDB / MySQL + Prisma ORM |
 | 队列 | Redis 7 + BullMQ |
 | UI | Tailwind CSS + Lucide Icons |
 | 认证 | JWT |
@@ -181,6 +205,10 @@ git pull && docker compose up -d --build
 # 本地开发
 npm install
 npm run dev
+
+# 切换到 MySQL/TiDB
+cp prisma/schema.mysql.prisma prisma/schema.prisma
+npx prisma generate
 ```
 
 ## 常见问题
@@ -192,6 +220,13 @@ npm run dev
 **Q: 如何修改检测间隔？**
 
 修改 `.env` 中的 `CRON_SCHEDULE`（cron 格式），如每小时：`0 * * * *`
+
+**Q: 如何切换到 TiDB/MySQL？**
+
+```bash
+cp prisma/schema.mysql.prisma prisma/schema.prisma
+docker compose up -d --build
+```
 
 **Q: Docker 构建失败？**
 

@@ -19,7 +19,6 @@ model Channel {
   apiKey    String   @map("api_key") @db.Text
   type      ChannelType @default(NEWAPI)
   proxy     String?  @db.VarChar(500)
-  group     String?  @db.VarChar(100)
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -1,5 +1,6 @@
--- NewAPI-Monitor 数据库初始化脚本
--- 首次启动时由 MySQL 容器自动执行
+-- NewAPI Model Check - MySQL/TiDB 数据库初始化脚本
+-- 通常由 Prisma (npx prisma db push) 自动管理表结构
+-- 此脚本用于手动初始化或不使用 Prisma CLI 的场景
 
 CREATE TABLE IF NOT EXISTS `channels` (
   `id` VARCHAR(30) NOT NULL,
