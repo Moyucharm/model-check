@@ -334,7 +334,7 @@ init_database() {
 
     # 执行数据库迁移
     info "执行 Prisma 迁移..."
-    if $compose_cmd exec -T app npx prisma db push --skip-generate; then
+    if $compose_cmd exec -T app npx prisma db push; then
         success "数据库初始化完成"
     else
         error "数据库初始化失败，请检查日志: docker logs newapi-model-check"

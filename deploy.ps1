@@ -301,7 +301,7 @@ function Initialize-Database {
 
     # 执行数据库迁移
     Write-Info "执行 Prisma 迁移..."
-    docker compose exec -T app npx prisma db push --skip-generate
+    docker compose exec -T app npx prisma db push
 
     if ($LASTEXITCODE -ne 0) {
         Write-Err "数据库初始化失败，请检查日志: docker logs newapi-model-check"
