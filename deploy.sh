@@ -78,10 +78,26 @@ install_docker() {
         echo ""
         read -p "安装完成后按 Enter 继续..."
     else
-        # Linux - 使用一键安装脚本
-        info "使用一键安装脚本安装 Docker..."
-        echo ""
-        bash <(curl -sSL https://xuanyuan.cloud/docker.sh)
+        # Linux - 先确保 curl 已安装
+        if ! command -v curl &> /dev/null; then
+            info "安装 curl..."
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update -qq && sudo apt-get install -y -qq curl
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y -q curl
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y -q curl
+            else
+                error "请先手动安装 curl"
+            fi
+        fi
+
+        # 下载并执行 Docker 官方安装脚本
+        info "下载 Docker 安装脚本..."
+        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+
+        info "执行安装脚本..."
+        sudo sh /tmp/get-docker.sh
 
         if [ $? -ne 0 ]; then
             error "Docker 安装失败，请手动安装后重试"
