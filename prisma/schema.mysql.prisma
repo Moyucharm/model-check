@@ -1,0 +1,85 @@
+// Prisma Schema for MySQL (TiDB Cloud, local MySQL)
+// Copy this file to schema.prisma when using MySQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Channel - API provider configuration
+model Channel {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(100)
+  baseUrl   String   @map("base_url") @db.VarChar(500)
+  apiKey    String   @map("api_key") @db.Text
+  type      ChannelType @default(NEWAPI)
+  proxy     String?  @db.VarChar(500)
+  group     String?  @db.VarChar(100)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  models    Model[]
+
+  @@map("channels")
+}
+
+// Model - Individual model within a channel
+model Model {
+  id                 String   @id @default(cuid())
+  channelId          String   @map("channel_id")
+  modelName          String   @map("model_name") @db.VarChar(200)
+  detectedEndpoints  Json?    @map("detected_endpoints")
+  lastStatus         Boolean? @map("last_status")
+  lastLatency        Int?     @map("last_latency")
+  lastCheckedAt      DateTime? @map("last_checked_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  channel   Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  checkLogs CheckLog[]
+
+  @@unique([channelId, modelName])
+  @@map("models")
+}
+
+// CheckLog - Detection history
+model CheckLog {
+  id              String       @id @default(cuid())
+  modelId         String       @map("model_id")
+  endpointType    EndpointType @map("endpoint_type")
+  status          CheckStatus
+  latency         Int?
+  statusCode      Int?         @map("status_code")
+  errorMsg        String?      @map("error_msg") @db.Text
+  responseContent String?      @map("response_content") @db.Text
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  model        Model        @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId, createdAt])
+  @@index([createdAt])
+  @@map("check_logs")
+}
+
+// Enums
+enum ChannelType {
+  NEWAPI
+  DIRECT
+}
+
+enum EndpointType {
+  CHAT
+  CLAUDE
+  GEMINI
+  CODEX
+}
+
+enum CheckStatus {
+  SUCCESS
+  FAIL
+}

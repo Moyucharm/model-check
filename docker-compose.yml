@@ -1,0 +1,97 @@
+# NewAPI Model Check - Docker Compose Configuration
+# https://github.com/chxcodepro/newapi-model-check
+#
+# Usage (通过 COMPOSE_PROFILES 控制启动哪些服务):
+#   全本地：    COMPOSE_PROFILES="local"        → PostgreSQL + Redis
+#   云数据库：  COMPOSE_PROFILES="redis"        → 仅 Redis（数据库用云端）
+#   云 Redis：  COMPOSE_PROFILES="db"           → 仅 PostgreSQL（Redis 用云端）
+#   全云端：    不设置 COMPOSE_PROFILES          → 都不启动
+#
+# Data Persistence:
+#   PostgreSQL data: ./data/postgres
+#   Redis data: ./data/redis
+
+services:
+  # ========================================
+  # Application
+  # ========================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: newapi-model-check
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DOCKER_DATABASE_URL:-postgresql://newapi:newapi123456@postgres:5432/newapi_monitor}
+      - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - DETECT_PROMPT=${DETECT_PROMPT:-1+1=2? yes or no}
+      - GLOBAL_PROXY=${GLOBAL_PROXY:-}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 */6 * * *}
+      - CLEANUP_SCHEDULE=${CLEANUP_SCHEDULE:-0 2 * * *}
+      - LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS:-7}
+    networks:
+      - newapi-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ========================================
+  # PostgreSQL Database
+  # ========================================
+  postgres:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    container_name: newapi-postgres
+    restart: unless-stopped
+    profiles: ["local", "db"]
+    environment:
+      POSTGRES_DB: newapi_monitor
+      POSTGRES_USER: newapi
+      POSTGRES_PASSWORD: newapi123456
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - newapi-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newapi -d newapi_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ========================================
+  # Redis Cache & Queue
+  # ========================================
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    container_name: newapi-redis
+    restart: unless-stopped
+    profiles: ["local", "redis"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - newapi-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes --stop-writes-on-bgsave-error no
+
+# ========================================
+# Networks
+# ========================================
+networks:
+  newapi-network:
+    driver: bridge

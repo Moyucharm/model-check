@@ -1,65 +1,161 @@
-import Image from "next/image";
+// Main page component
+
+"use client";
+
+import { useState, useCallback, useEffect, useRef } from "react";
+import { Header, EndpointFilter, StatusFilter } from "@/components/layout/header";
+import { LoginModal } from "@/components/ui/login-modal";
+import { Dashboard } from "@/components/dashboard";
+import { useSSE } from "@/hooks/use-sse";
+
+// Polling interval for testing status (5 seconds)
+const TESTING_STATUS_POLL_INTERVAL = 5000;
 
 export default function Home() {
+  const [showLogin, setShowLogin] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Filter state (shared between Header and Dashboard)
+  const [search, setSearch] = useState("");
+  const [endpointFilter, setEndpointFilter] = useState<EndpointFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+
+  // Testing models state (track which models are currently being tested)
+  const [testingModelIds, setTestingModelIds] = useState<Set<string>>(new Set());
+
+  // Detection running state
+  const [isDetectionRunning, setIsDetectionRunning] = useState(false);
+
+  // Track if polling should be active
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Add models to testing set
+  const addTestingModels = useCallback((modelIds: string[]) => {
+    setTestingModelIds((prev) => {
+      const next = new Set(prev);
+      modelIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
+  // Remove model from testing set
+  const removeTestingModel = useCallback((modelId: string) => {
+    setTestingModelIds((prev) => {
+      const next = new Set(prev);
+      next.delete(modelId);
+      return next;
+    });
+  }, []);
+
+  // Fetch detection progress (used for initial load and polling)
+  const fetchProgress = useCallback(async () => {
+    try {
+      const response = await fetch("/api/detect");
+      if (response.ok) {
+        const data = await response.json();
+        // Update testing model IDs
+        if (data.testingModelIds && Array.isArray(data.testingModelIds)) {
+          setTestingModelIds(new Set(data.testingModelIds));
+          // Update detection running state
+          setIsDetectionRunning(data.testingModelIds.length > 0);
+        } else {
+          setIsDetectionRunning(false);
+        }
+      }
+    } catch (error) {
+      console.error("[Page] Failed to fetch detection progress:", error);
+    }
+  }, []);
+
+  // Remove multiple models from testing set (for stop action)
+  const removeTestingModels = useCallback((modelIds: string[]) => {
+    setTestingModelIds((prev) => {
+      const next = new Set(prev);
+      modelIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    // Trigger refresh after stopping
+    fetchProgress();
+  }, [fetchProgress]);
+
+  // Fetch initial detection progress on page load
+  useEffect(() => {
+    fetchProgress();
+  }, [fetchProgress]);
+
+  // Poll for testing status when detection is running
+  useEffect(() => {
+    // Clear existing interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+
+    // Start polling if detection is running or we have testing models
+    if (isDetectionRunning || testingModelIds.size > 0) {
+      pollIntervalRef.current = setInterval(fetchProgress, TESTING_STATUS_POLL_INTERVAL);
+    }
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [isDetectionRunning, testingModelIds.size, fetchProgress]);
+
+  // SSE for real-time updates
+  const { isConnected } = useSSE({
+    onProgress: (event) => {
+      // Remove model from testing set when test completes
+      if (event.type === "progress" && event.modelId) {
+        removeTestingModel(event.modelId);
+      }
+      // Trigger dashboard refresh
+      setRefreshKey((k) => k + 1);
+    },
+  });
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="min-h-screen flex flex-col">
+      <Header
+        onLoginClick={() => setShowLogin(true)}
+        isConnected={isConnected}
+        isDetectionRunning={isDetectionRunning}
+        search={search}
+        onSearchChange={setSearch}
+        endpointFilter={endpointFilter}
+        onEndpointFilterChange={setEndpointFilter}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+      />
+
+      <main className="flex-1 container mx-auto px-4 py-6">
+        <Dashboard
+          refreshKey={refreshKey}
+          search={search}
+          endpointFilter={endpointFilter}
+          statusFilter={statusFilter}
+          testingModelIds={testingModelIds}
+          onTestModels={addTestingModels}
+          onStopModels={removeTestingModels}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
       </main>
+
+      <footer className="border-t border-border py-4">
+        <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
+          <a
+            href="https://github.com/chxcodepro/newapi-check"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground transition-colors"
+          >
+            NewAPI 监控
+          </a>
+          {" - API 渠道可用性检测系统"}
+        </div>
+      </footer>
+
+      <LoginModal isOpen={showLogin} onClose={() => setShowLogin(false)} />
     </div>
   );
 }

@@ -1,36 +1,202 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NewAPI Model Check
 
-## Getting Started
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED)](https://www.docker.com/)
 
-First, run the development server:
+API 渠道可用性检测系统 - 实时监控多个 API 渠道的模型可用性状态。
+
+## 功能特性
+
+- **多端点检测** - 支持 OpenAI Chat、Claude、Gemini、Codex 等多种 API 格式
+- **实时监控** - SSE 实时推送检测进度
+- **定时任务** - 可配置的周期性检测（默认每 6 小时）
+- **数据清理** - 自动清理过期日志（默认保留 7 天）
+- **渠道管理** - 支持 WebDAV 同步、批量导入导出
+- **深色模式** - 支持浅色/深色主题切换
+- **一键部署** - Docker 一键部署，自动安装 Docker
+
+## 快速开始
+
+### 一键部署（推荐）
+
+无需手动安装 Docker，脚本会自动检测并安装：
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/chxcodepro/newapi-model-check.git
+cd newapi-model-check
+
+# Linux / macOS
+chmod +x deploy.sh && ./deploy.sh
+
+# Windows PowerShell
+.\deploy.ps1
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+部署脚本会自动完成：
+1. 检测并安装 Docker（Linux 使用 `bash <(curl -sSL https://xuanyuan.cloud/docker.sh)`）
+2. 生成安全的 JWT 密钥
+3. 引导设置管理员密码
+4. 启动 PostgreSQL + Redis + 应用
+5. 初始化数据库
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+部署完成后访问 **http://localhost:3000**
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 部署模式
 
-## Learn More
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| 本地模式 | `./deploy.sh` | PostgreSQL + Redis 本地运行（默认） |
+| 云数据库 | `./deploy.sh --cloud-db` | 使用 Supabase/Neon 云数据库 |
+| 云 Redis | `./deploy.sh --cloud-redis` | 使用 Upstash 云 Redis |
+| 全云端 | `./deploy.sh --cloud` | 数据库和 Redis 都使用云服务 |
 
-To learn more about Next.js, take a look at the following resources:
+### 手动部署
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+# 1. 克隆项目
+git clone https://github.com/chxcodepro/newapi-model-check.git
+cd newapi-model-check
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，设置 ADMIN_PASSWORD 和 JWT_SECRET
 
-## Deploy on Vercel
+# 3. 启动服务
+docker compose up -d
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+# 4. 初始化数据库
+docker compose exec app npx prisma db push
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 环境变量
+
+### 必须配置
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `ADMIN_PASSWORD` | 管理员登录密码 | `MySecurePassword123` |
+| `JWT_SECRET` | JWT 签名密钥（建议 32 位以上） | `openssl rand -base64 32` |
+
+### 可选配置
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `DETECT_PROMPT` | 检测提示词 | `1+1=2? yes or no` |
+| `GLOBAL_PROXY` | 全局代理地址 | - |
+| `CRON_SCHEDULE` | 检测周期（cron 格式） | `0 */6 * * *` |
+| `LOG_RETENTION_DAYS` | 日志保留天数 | `7` |
+| `APP_PORT` | 应用端口 | `3000` |
+
+## 云服务配置
+
+### 云数据库（PostgreSQL）
+
+**Supabase（推荐）**
+```bash
+DOCKER_DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres"
+```
+
+**Neon**
+```bash
+DOCKER_DATABASE_URL="postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require"
+```
+
+### 云 Redis
+
+**Upstash（推荐）**
+```bash
+DOCKER_REDIS_URL="redis://default:[PASSWORD]@[ENDPOINT].upstash.io:6379"
+```
+
+## API 接口
+
+| 端点 | 方法 | 认证 | 说明 |
+|------|------|------|------|
+| `/api/status` | GET | 否 | 健康检查 |
+| `/api/dashboard` | GET | 否 | 仪表板数据 |
+| `/api/auth/login` | POST | 否 | 管理员登录 |
+| `/api/channel` | GET/POST/PUT/DELETE | 是 | 渠道 CRUD |
+| `/api/channel/[id]/sync` | POST | 是 | 同步模型列表 |
+| `/api/channel/import` | POST | 是 | 批量导入渠道 |
+| `/api/channel/export` | GET | 是 | 导出渠道配置 |
+| `/api/detect` | POST | 是 | 触发检测 |
+| `/api/scheduler` | GET/POST | 是 | 调度器管理 |
+| `/api/sse/progress` | GET | 否 | SSE 实时进度 |
+
+## 项目结构
+
+```
+newapi-model-check/
+├── src/
+│   ├── app/                    # Next.js App Router
+│   │   └── api/               # API 路由
+│   ├── components/            # React 组件
+│   │   ├── dashboard/         # 仪表板
+│   │   ├── layout/           # 布局
+│   │   └── ui/               # UI 组件
+│   ├── hooks/                 # React Hooks
+│   └── lib/                   # 核心库
+│       ├── detection/        # 检测策略
+│       ├── queue/            # BullMQ 队列
+│       └── scheduler/        # Cron 调度
+├── prisma/
+│   ├── schema.prisma         # PostgreSQL Schema
+│   └── schema.mysql.prisma   # MySQL Schema（备用）
+├── docker-compose.yml
+├── Dockerfile
+├── deploy.sh                  # Linux/macOS 部署脚本
+└── deploy.ps1                 # Windows 部署脚本
+```
+
+## 技术栈
+
+| 类别 | 技术 |
+|------|------|
+| 框架 | Next.js 16 (App Router) |
+| 语言 | TypeScript 5 |
+| 数据库 | PostgreSQL 16 + Prisma ORM |
+| 队列 | Redis 7 + BullMQ |
+| UI | Tailwind CSS + Lucide Icons |
+| 认证 | JWT |
+| 部署 | Docker + Docker Compose |
+
+## 常用命令
+
+```bash
+# 查看日志
+docker logs -f newapi-model-check
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+
+# 更新部署
+git pull && docker compose up -d --build
+
+# 本地开发
+npm install
+npm run dev
+```
+
+## 常见问题
+
+**Q: 忘记管理员密码？**
+
+修改 `.env` 中的 `ADMIN_PASSWORD`，然后重启：`docker compose restart`
+
+**Q: 如何修改检测间隔？**
+
+修改 `.env` 中的 `CRON_SCHEDULE`（cron 格式），如每小时：`0 * * * *`
+
+**Q: Docker 构建失败？**
+
+镜像已配置国内加速源，如仍有问题可配置 Docker 镜像加速器。
+
+## License
+
+[MIT](LICENSE)

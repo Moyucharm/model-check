@@ -1,0 +1,104 @@
+// Simple toast notification component
+
+"use client";
+
+import { createContext, useContext, useState, useCallback, ReactNode } from "react";
+import { X, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+type ToastType = "success" | "error" | "loading";
+
+interface Toast {
+  id: string;
+  message: string;
+  type: ToastType;
+}
+
+interface ToastContextValue {
+  toast: (message: string, type?: ToastType) => string;
+  dismiss: (id: string) => void;
+  update: (id: string, message: string, type: ToastType) => void;
+}
+
+const ToastContext = createContext<ToastContextValue | null>(null);
+
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const toast = useCallback((message: string, type: ToastType = "success") => {
+    const id = Date.now().toString();
+    setToasts((prev) => [...prev, { id, message, type }]);
+
+    // Auto dismiss non-loading toasts after 3s
+    if (type !== "loading") {
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 3000);
+    }
+
+    return id;
+  }, []);
+
+  const dismiss = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const update = useCallback((id: string, message: string, type: ToastType) => {
+    setToasts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, message, type } : t))
+    );
+
+    // Auto dismiss after update if not loading
+    if (type !== "loading") {
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 3000);
+    }
+  }, []);
+
+  return (
+    <ToastContext.Provider value={{ toast, dismiss, update }}>
+      {children}
+
+      {/* All toasts - centered with prominent style */}
+      {toasts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+          <div className="flex flex-col gap-3 pointer-events-auto">
+            {toasts.map((t) => (
+              <div
+                key={t.id}
+                className={cn(
+                  "flex items-center gap-3 px-6 py-4 rounded-xl shadow-2xl border-2 backdrop-blur-md animate-in zoom-in-95 fade-in duration-200",
+                  t.type === "loading" && "border-blue-500/50 bg-blue-500/20 text-blue-600 dark:text-blue-400",
+                  t.type === "success" && "border-green-500/50 bg-green-500/20 text-green-600 dark:text-green-400",
+                  t.type === "error" && "border-red-500/50 bg-red-500/20 text-red-600 dark:text-red-400"
+                )}
+              >
+                {t.type === "success" && <CheckCircle className="h-5 w-5 shrink-0" />}
+                {t.type === "error" && <XCircle className="h-5 w-5 shrink-0" />}
+                {t.type === "loading" && <Loader2 className="h-5 w-5 shrink-0 animate-spin" />}
+                <span className="text-base font-medium">{t.message}</span>
+                {t.type !== "loading" && (
+                  <button
+                    onClick={() => dismiss(t.id)}
+                    className="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors shrink-0 ml-2"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </ToastContext.Provider>
+  );
+}
+
+export function useToast() {
+  const context = useContext(ToastContext);
+  if (!context) {
+    throw new Error("useToast must be used within ToastProvider");
+  }
+  return context;
+}
