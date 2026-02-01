@@ -34,6 +34,175 @@ success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# 全局变量：存储检测到的服务信息
+DETECTED_REDIS_URL=""
+DETECTED_POSTGRES_URL=""
+USE_EXTERNAL_REDIS=false
+USE_EXTERNAL_POSTGRES=false
+REDIS_PORT_TO_USE=6379
+POSTGRES_PORT_TO_USE=5432
+
+# 检查端口是否被占用
+check_port_in_use() {
+    local port=$1
+    if command -v ss &> /dev/null; then
+        ss -tuln 2>/dev/null | grep -q ":${port} " && return 0
+    elif command -v netstat &> /dev/null; then
+        netstat -tuln 2>/dev/null | grep -q ":${port} " && return 0
+    elif command -v lsof &> /dev/null; then
+        lsof -i :${port} &>/dev/null && return 0
+    fi
+    return 1
+}
+
+# 查找可用端口
+find_available_port() {
+    local start_port=$1
+    local port=$start_port
+    while check_port_in_use $port; do
+        port=$((port + 1))
+        if [ $port -gt $((start_port + 100)) ]; then
+            echo $start_port
+            return 1
+        fi
+    done
+    echo $port
+}
+
+# 检测 Docker 中运行的 Redis 容器
+detect_docker_redis() {
+    info "检测 Docker Redis 服务..."
+
+    # 查找正在运行的 Redis 容器（排除本项目的容器）
+    local redis_containers=$(docker ps --format '{{.Names}}:{{.Ports}}' 2>/dev/null | grep -i redis | grep -v "newapi-redis" || true)
+
+    if [ -n "$redis_containers" ]; then
+        # 解析第一个找到的 Redis 容器
+        local container_info=$(echo "$redis_containers" | head -n 1)
+        local container_name=$(echo "$container_info" | cut -d: -f1)
+
+        # 尝试获取 Redis 容器的网络信息
+        local redis_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name" 2>/dev/null || true)
+        local redis_port=$(docker inspect -f '{{range $p, $conf := .NetworkSettings.Ports}}{{if eq $p "6379/tcp"}}{{(index $conf 0).HostPort}}{{end}}{{end}}' "$container_name" 2>/dev/null || true)
+
+        if [ -n "$redis_ip" ]; then
+            success "检测到 Docker Redis 容器: $container_name (IP: $redis_ip)"
+
+            # 检查是否可以连接
+            if docker exec "$container_name" redis-cli ping &>/dev/null; then
+                # 获取容器所在的网络
+                local redis_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
+
+                if [ -n "$redis_network" ]; then
+                    DETECTED_REDIS_URL="redis://${container_name}:6379"
+                    USE_EXTERNAL_REDIS=true
+                    EXTERNAL_REDIS_NETWORK="$redis_network"
+                    EXTERNAL_REDIS_CONTAINER="$container_name"
+                    success "可复用 Redis 容器: $container_name (网络: $redis_network)"
+                    return 0
+                fi
+            fi
+        fi
+    fi
+
+    # 检查端口 6379 是否被占用（非 Docker 方式运行的 Redis）
+    if check_port_in_use 6379; then
+        # 尝试连接本地 Redis
+        if command -v redis-cli &>/dev/null && redis-cli ping &>/dev/null; then
+            DETECTED_REDIS_URL="redis://host.docker.internal:6379"
+            USE_EXTERNAL_REDIS=true
+            success "检测到本地 Redis 服务，将使用 host.docker.internal:6379"
+            return 0
+        else
+            warn "端口 6379 被占用但无法连接，将使用其他端口"
+            REDIS_PORT_TO_USE=$(find_available_port 6380)
+            if [ "$REDIS_PORT_TO_USE" != "6380" ] || ! check_port_in_use 6380; then
+                warn "Redis 将使用端口: $REDIS_PORT_TO_USE"
+            fi
+        fi
+    fi
+
+    info "未检测到可复用的 Redis，将启动新容器"
+    return 1
+}
+
+# 检测 Docker 中运行的 PostgreSQL 容器
+detect_docker_postgres() {
+    info "检测 Docker PostgreSQL 服务..."
+
+    # 查找正在运行的 PostgreSQL 容器（排除本项目的容器）
+    local postgres_containers=$(docker ps --format '{{.Names}}:{{.Ports}}' 2>/dev/null | grep -i postgres | grep -v "newapi-postgres" || true)
+
+    if [ -n "$postgres_containers" ]; then
+        # 解析第一个找到的 PostgreSQL 容器
+        local container_info=$(echo "$postgres_containers" | head -n 1)
+        local container_name=$(echo "$container_info" | cut -d: -f1)
+
+        # 尝试获取容器的网络信息
+        local postgres_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name" 2>/dev/null || true)
+
+        if [ -n "$postgres_ip" ]; then
+            success "检测到 Docker PostgreSQL 容器: $container_name (IP: $postgres_ip)"
+
+            # 获取容器所在的网络
+            local postgres_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
+
+            if [ -n "$postgres_network" ]; then
+                # 注意：这里只记录容器信息，实际连接字符串需要用户确认密码
+                EXTERNAL_POSTGRES_CONTAINER="$container_name"
+                EXTERNAL_POSTGRES_NETWORK="$postgres_network"
+                warn "检测到 PostgreSQL 容器: $container_name"
+                warn "若要复用，请手动配置 DOCKER_DATABASE_URL 连接字符串"
+                echo ""
+                read -p "是否复用此 PostgreSQL? 需要输入连接信息 (y/N): " reuse_pg
+                if [[ "$reuse_pg" =~ ^[Yy]$ ]]; then
+                    echo "请输入 PostgreSQL 连接字符串"
+                    echo "格式: postgresql://用户名:密码@${container_name}:5432/数据库名"
+                    read -p "连接字符串: " pg_url
+                    if [ -n "$pg_url" ]; then
+                        DETECTED_POSTGRES_URL="$pg_url"
+                        USE_EXTERNAL_POSTGRES=true
+                        success "将复用 PostgreSQL 容器: $container_name"
+                        return 0
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    # 检查端口 5432 是否被占用（非 Docker 方式运行的 PostgreSQL）
+    if check_port_in_use 5432; then
+        warn "端口 5432 被占用"
+        read -p "是否是已有的 PostgreSQL 服务? 输入连接字符串复用，或按 Enter 跳过: " pg_url
+        if [ -n "$pg_url" ]; then
+            DETECTED_POSTGRES_URL="$pg_url"
+            USE_EXTERNAL_POSTGRES=true
+            success "将使用指定的 PostgreSQL 服务"
+            return 0
+        else
+            POSTGRES_PORT_TO_USE=$(find_available_port 5433)
+            warn "PostgreSQL 将使用端口: $POSTGRES_PORT_TO_USE"
+        fi
+    fi
+
+    info "未检测到可复用的 PostgreSQL，将启动新容器"
+    return 1
+}
+
+# 自动检测并配置外部服务
+auto_detect_services() {
+    info "自动检测现有 Docker 服务..."
+    echo ""
+
+    # 检测 Redis
+    detect_docker_redis || true
+
+    # 检测 PostgreSQL
+    detect_docker_postgres || true
+
+    echo ""
+}
+
 # 显示 Banner
 show_banner() {
     echo -e "${CYAN}"
@@ -56,7 +225,13 @@ show_help() {
     echo ""
     echo "其他选项:"
     echo "  --rebuild     强制重新构建镜像"
+    echo "  --skip-detect 跳过自动检测现有 Docker 服务"
     echo "  --help        显示此帮助信息"
+    echo ""
+    echo "自动检测功能:"
+    echo "  脚本会自动检测 Docker 中已运行的 Redis/PostgreSQL 容器"
+    echo "  如果检测到，可以选择复用这些服务"
+    echo "  如果端口被占用但无法复用，会自动使用其他可用端口"
     echo ""
     echo "云服务推荐:"
     echo "  PostgreSQL: Supabase (免费), Neon (免费)"
@@ -192,8 +367,22 @@ setup_env() {
     info "创建 .env 配置文件..."
     cp .env.example .env
 
+    # 根据自动检测结果调整部署模式
+    local effective_mode=$mode
+
+    if [ "$USE_EXTERNAL_REDIS" = true ] && [ "$USE_EXTERNAL_POSTGRES" = true ]; then
+        effective_mode="cloud"
+        info "检测到外部 Redis 和 PostgreSQL，切换到全云端模式"
+    elif [ "$USE_EXTERNAL_POSTGRES" = true ]; then
+        effective_mode="cloud-db"
+        info "检测到外部 PostgreSQL，切换到云数据库模式"
+    elif [ "$USE_EXTERNAL_REDIS" = true ]; then
+        effective_mode="cloud-redis"
+        info "检测到外部 Redis，切换到云 Redis 模式"
+    fi
+
     # 设置部署模式
-    case $mode in
+    case $effective_mode in
         local)
             sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="local"/' .env
             ;;
@@ -207,6 +396,46 @@ setup_env() {
             sed -i 's/^COMPOSE_PROFILES=.*/#COMPOSE_PROFILES=""/' .env
             ;;
     esac
+
+    # 配置检测到的外部 Redis
+    if [ "$USE_EXTERNAL_REDIS" = true ] && [ -n "$DETECTED_REDIS_URL" ]; then
+        info "配置外部 Redis: $DETECTED_REDIS_URL"
+        local redis_url_escaped=$(echo "$DETECTED_REDIS_URL" | sed 's/[&/\]/\\&/g')
+        sed -i "s|^# DOCKER_REDIS_URL=.*|DOCKER_REDIS_URL=\"$redis_url_escaped\"|" .env
+        sed -i "s|^#DOCKER_REDIS_URL=.*|DOCKER_REDIS_URL=\"$redis_url_escaped\"|" .env
+        # 确保添加配置行（如果不存在）
+        if ! grep -q "^DOCKER_REDIS_URL=" .env; then
+            echo "DOCKER_REDIS_URL=\"$DETECTED_REDIS_URL\"" >> .env
+        fi
+    fi
+
+    # 配置检测到的外部 PostgreSQL
+    if [ "$USE_EXTERNAL_POSTGRES" = true ] && [ -n "$DETECTED_POSTGRES_URL" ]; then
+        info "配置外部 PostgreSQL"
+        local db_url_escaped=$(echo "$DETECTED_POSTGRES_URL" | sed 's/[&/\]/\\&/g')
+        sed -i "s|^# DOCKER_DATABASE_URL=.*|DOCKER_DATABASE_URL=\"$db_url_escaped\"|" .env
+        sed -i "s|^#DOCKER_DATABASE_URL=.*|DOCKER_DATABASE_URL=\"$db_url_escaped\"|" .env
+        if ! grep -q "^DOCKER_DATABASE_URL=" .env; then
+            echo "DOCKER_DATABASE_URL=\"$DETECTED_POSTGRES_URL\"" >> .env
+        fi
+    fi
+
+    # 配置端口（如果需要规避）
+    if [ "$REDIS_PORT_TO_USE" != "6379" ]; then
+        info "配置 Redis 端口: $REDIS_PORT_TO_USE"
+        sed -i "s|^# REDIS_PORT=.*|REDIS_PORT=\"$REDIS_PORT_TO_USE\"|" .env
+        if ! grep -q "^REDIS_PORT=" .env; then
+            echo "REDIS_PORT=\"$REDIS_PORT_TO_USE\"" >> .env
+        fi
+    fi
+
+    if [ "$POSTGRES_PORT_TO_USE" != "5432" ]; then
+        info "配置 PostgreSQL 端口: $POSTGRES_PORT_TO_USE"
+        sed -i "s|^# POSTGRES_PORT=.*|POSTGRES_PORT=\"$POSTGRES_PORT_TO_USE\"|" .env
+        if ! grep -q "^POSTGRES_PORT=" .env; then
+            echo "POSTGRES_PORT=\"$POSTGRES_PORT_TO_USE\"" >> .env
+        fi
+    fi
 
     # 生成 JWT 密钥
     local jwt_secret=$(generate_secret)
@@ -227,8 +456,8 @@ setup_env() {
         warn "使用默认密码 admin123，建议后续修改"
     fi
 
-    # 云数据库配置
-    if [[ "$mode" == "cloud-db" || "$mode" == "cloud" ]]; then
+    # 云数据库配置（仅当未自动检测到外部服务时询问）
+    if [[ "$mode" == "cloud-db" || "$mode" == "cloud" ]] && [ "$USE_EXTERNAL_POSTGRES" != true ]; then
         echo ""
         info "请配置云数据库连接..."
         echo "支持的格式:"
@@ -248,8 +477,8 @@ setup_env() {
         fi
     fi
 
-    # 云 Redis 配置
-    if [[ "$mode" == "cloud-redis" || "$mode" == "cloud" ]]; then
+    # 云 Redis 配置（仅当未自动检测到外部服务时询问）
+    if [[ "$mode" == "cloud-redis" || "$mode" == "cloud" ]] && [ "$USE_EXTERNAL_REDIS" != true ]; then
         echo ""
         info "请配置云 Redis 连接..."
         echo "支持的格式:"
@@ -292,6 +521,18 @@ start_services() {
     fi
 
     success "服务启动中..."
+
+    # 如果使用外部 Redis，将应用容器连接到 Redis 所在网络
+    if [ "$USE_EXTERNAL_REDIS" = true ] && [ -n "$EXTERNAL_REDIS_NETWORK" ]; then
+        info "将应用容器连接到 Redis 网络: $EXTERNAL_REDIS_NETWORK"
+        docker network connect "$EXTERNAL_REDIS_NETWORK" newapi-model-check 2>/dev/null || warn "网络连接失败，可能已连接"
+    fi
+
+    # 如果使用外部 PostgreSQL，将应用容器连接到 PostgreSQL 所在网络
+    if [ "$USE_EXTERNAL_POSTGRES" = true ] && [ -n "$EXTERNAL_POSTGRES_NETWORK" ]; then
+        info "将应用容器连接到 PostgreSQL 网络: $EXTERNAL_POSTGRES_NETWORK"
+        docker network connect "$EXTERNAL_POSTGRES_NETWORK" newapi-model-check 2>/dev/null || warn "网络连接失败，可能已连接"
+    fi
 
     # 等待服务就绪
     info "等待服务就绪..."
@@ -371,6 +612,26 @@ show_result() {
     echo -e "访问地址: ${CYAN}http://localhost:${port}${NC}"
     echo -e "管理密码: 你设置的 ADMIN_PASSWORD"
     echo ""
+
+    # 显示服务配置信息
+    echo "服务配置:"
+    if [ "$USE_EXTERNAL_REDIS" = true ]; then
+        echo -e "  Redis:      ${CYAN}外部服务${NC} (${EXTERNAL_REDIS_CONTAINER:-$DETECTED_REDIS_URL})"
+    elif [ "$REDIS_PORT_TO_USE" != "6379" ]; then
+        echo -e "  Redis:      ${CYAN}本地容器${NC} (端口: $REDIS_PORT_TO_USE)"
+    else
+        echo -e "  Redis:      ${CYAN}本地容器${NC} (端口: 6379)"
+    fi
+
+    if [ "$USE_EXTERNAL_POSTGRES" = true ]; then
+        echo -e "  PostgreSQL: ${CYAN}外部服务${NC} (${EXTERNAL_POSTGRES_CONTAINER:-云端})"
+    elif [ "$POSTGRES_PORT_TO_USE" != "5432" ]; then
+        echo -e "  PostgreSQL: ${CYAN}本地容器${NC} (端口: $POSTGRES_PORT_TO_USE)"
+    else
+        echo -e "  PostgreSQL: ${CYAN}本地容器${NC} (端口: 5432)"
+    fi
+    echo ""
+
     echo "常用命令:"
     echo "  查看日志:   docker logs -f newapi-model-check"
     echo "  重启服务:   docker compose restart"
@@ -388,6 +649,7 @@ main() {
     # 解析参数
     local mode="local"
     local rebuild="false"
+    local skip_detect="false"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -411,6 +673,10 @@ main() {
                 rebuild="true"
                 shift
                 ;;
+            --skip-detect)
+                skip_detect="true"
+                shift
+                ;;
             --help|-h)
                 show_help
                 ;;
@@ -425,6 +691,12 @@ main() {
 
     # 执行部署流程
     check_dependencies
+
+    # 自动检测现有服务（除非明确跳过或使用全云端模式）
+    if [ "$skip_detect" != "true" ] && [ "$mode" != "cloud" ]; then
+        auto_detect_services
+    fi
+
     setup_env "$mode"
     start_services "$rebuild"
     init_database

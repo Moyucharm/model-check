@@ -18,27 +18,22 @@ API 渠道可用性检测系统 - 实时监控多个 API 渠道的模型可用�
 - **渠道管理** - 支持 WebDAV 同步、批量导入导出
 - **多数据库** - 支持 PostgreSQL（默认）、TiDB、MySQL
 - **深色模式** - 支持浅色/深色主题切换
-- **一键部署** - Docker 一键部署，自动安装 Docker
+- **一键部署** - Docker 一键部署（Linux / macOS）
 
 ## 快速开始
 
-### 一键部署（推荐）
+### 一键部署（Linux / macOS）
 
 无需手动安装 Docker，脚本会自动检测并安装：
 
 ```bash
 git clone https://github.com/chxcodepro/newapi-model-check.git
 cd newapi-model-check
-
-# Linux / macOS
 chmod +x deploy.sh && ./deploy.sh
-
-# Windows PowerShell
-.\deploy.ps1
 ```
 
 部署脚本会自动完成：
-1. 检测并安装 Docker（Linux 使用 `bash <(curl -sSL https://xuanyuan.cloud/docker.sh)`）
+1. 检测并安装 Docker
 2. 生成安全的 JWT 密钥
 3. 引导设置管理员密码
 4. 启动 PostgreSQL + Redis + 应用
@@ -171,8 +166,7 @@ newapi-model-check/
 │   └── schema.mysql.prisma   # MySQL/TiDB Schema
 ├── docker-compose.yml
 ├── Dockerfile
-├── deploy.sh                  # Linux/macOS 部署脚本
-└── deploy.ps1                 # Windows 部署脚本
+└── deploy.sh                  # Linux/macOS 部署脚本
 ```
 
 ## 技术栈
