@@ -41,6 +41,7 @@ USE_EXTERNAL_REDIS=false
 USE_EXTERNAL_POSTGRES=false
 REDIS_PORT_TO_USE=6379
 POSTGRES_PORT_TO_USE=5432
+EXTERNAL_NETWORKS=()
 
 # 获取 Docker 宿主机地址（从容器内访问宿主机）
 get_docker_host() {
@@ -64,6 +65,46 @@ get_container_host_port() {
         # 提取端口号
         echo "$port_mapping" | sed 's/.*://'
     fi
+}
+
+# 生成 docker-compose.override.yml 配置外部网络
+generate_compose_override() {
+    # 如果没有外部网络需要连接，删除 override 文件（如果存在）
+    if [ ${#EXTERNAL_NETWORKS[@]} -eq 0 ]; then
+        rm -f docker-compose.override.yml
+        return
+    fi
+
+    info "生成 docker-compose.override.yml 配置外部网络..."
+
+    # 去重
+    local unique_networks=($(echo "${EXTERNAL_NETWORKS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+    # 开始写入文件
+    cat > docker-compose.override.yml << 'HEADER'
+# 自动生成 - 用于连接外部 Docker 网络
+# 请勿手动编辑，重新运行 deploy.sh 会覆盖此文件
+
+services:
+  app:
+    networks:
+      - newapi-network
+HEADER
+
+    # 添加外部网络引用
+    for net in "${unique_networks[@]}"; do
+        echo "      - ${net}" >> docker-compose.override.yml
+    done
+
+    # 添加 networks 定义
+    echo "" >> docker-compose.override.yml
+    echo "networks:" >> docker-compose.override.yml
+    for net in "${unique_networks[@]}"; do
+        echo "  ${net}:" >> docker-compose.override.yml
+        echo "    external: true" >> docker-compose.override.yml
+    done
+
+    success "已生成 docker-compose.override.yml"
 }
 
 # 检查端口是否被占用
@@ -113,40 +154,28 @@ detect_docker_redis() {
 
             # 检查是否可以连接
             if docker exec "$container_name" redis-cli ping &>/dev/null; then
-                # 检查是否有端口映射到宿主机
-                local host_port=$(get_container_host_port "$container_name" "6379")
+                echo ""
+                read -p "是否复用此 Redis? (Y/n): " reuse_redis
+                if [[ ! "$reuse_redis" =~ ^[Nn]$ ]]; then
+                    # 检查是否有端口映射到宿主机
+                    local host_port=$(get_container_host_port "$container_name" "6379")
 
-                if [ -n "$host_port" ]; then
-                    # 有端口映射，使用宿主机地址（更可靠）
-                    local docker_host=$(get_docker_host)
-                    echo ""
-                    read -p "是否复用此 Redis? (Y/n): " reuse_redis
-                    if [[ ! "$reuse_redis" =~ ^[Nn]$ ]]; then
+                    if [ -n "$host_port" ]; then
+                        # 有端口映射，使用宿主机地址
+                        local docker_host=$(get_docker_host)
                         DETECTED_REDIS_URL="redis://${docker_host}:${host_port}"
-                        USE_EXTERNAL_REDIS=true
                         success "可复用 Redis: ${docker_host}:${host_port}"
-                        return 0
                     else
-                        info "跳过复用，将启动新的 Redis 容器"
+                        # 无端口映射，使用容器名 + 外部网络
+                        local redis_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
+                        DETECTED_REDIS_URL="redis://${container_name}:6379"
+                        EXTERNAL_NETWORKS+=("$redis_network")
+                        success "可复用 Redis: ${container_name}:6379 (网络: $redis_network)"
                     fi
+                    USE_EXTERNAL_REDIS=true
+                    return 0
                 else
-                    # 无端口映射，需要网络连接（仅脚本部署时有效）
-                    local redis_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
-                    if [ -n "$redis_network" ]; then
-                        warn "Redis 容器无端口映射，需要通过 Docker 网络连接"
-                        echo ""
-                        read -p "是否复用此 Redis? (注意: docker compose restart 后需重新运行脚本) (y/N): " reuse_redis
-                        if [[ "$reuse_redis" =~ ^[Yy]$ ]]; then
-                            DETECTED_REDIS_URL="redis://${container_name}:6379"
-                            USE_EXTERNAL_REDIS=true
-                            EXTERNAL_REDIS_NETWORK="$redis_network"
-                            EXTERNAL_REDIS_CONTAINER="$container_name"
-                            success "可复用 Redis 容器: $container_name (网络: $redis_network)"
-                            return 0
-                        else
-                            info "跳过复用，将启动新的 Redis 容器"
-                        fi
-                    fi
+                    info "跳过复用，将启动新的 Redis 容器"
                 fi
             fi
         fi
@@ -213,42 +242,29 @@ detect_docker_postgres() {
 
                 # 验证连接
                 if docker exec "$container_name" psql -U "$pg_user" -d "$pg_db" -c "SELECT 1" &>/dev/null; then
-                    # 检查是否有端口映射到宿主机
-                    local host_port=$(get_container_host_port "$container_name" "5432")
+                    echo ""
+                    read -p "是否复用此 PostgreSQL? (Y/n): " reuse_pg
+                    if [[ ! "$reuse_pg" =~ ^[Nn]$ ]]; then
+                        # 检查是否有端口映射到宿主机
+                        local host_port=$(get_container_host_port "$container_name" "5432")
 
-                    if [ -n "$host_port" ]; then
-                        # 有端口映射，使用宿主机地址（更可靠）
-                        local docker_host=$(get_docker_host)
-                        local auto_url="postgresql://${pg_user}:${pg_password}@${docker_host}:${host_port}/${pg_db}"
-                        echo ""
-                        read -p "是否复用此 PostgreSQL? (Y/n): " reuse_pg
-                        if [[ ! "$reuse_pg" =~ ^[Nn]$ ]]; then
-                            DETECTED_POSTGRES_URL="$auto_url"
-                            USE_EXTERNAL_POSTGRES=true
+                        if [ -n "$host_port" ]; then
+                            # 有端口映射，使用宿主机地址
+                            local docker_host=$(get_docker_host)
+                            DETECTED_POSTGRES_URL="postgresql://${pg_user}:${pg_password}@${docker_host}:${host_port}/${pg_db}"
                             success "可复用 PostgreSQL: ${docker_host}:${host_port}"
-                            return 0
                         else
-                            info "跳过复用，将启动新的 PostgreSQL 容器"
-                            return 1
+                            # 无端口映射，使用容器名 + 外部网络
+                            local postgres_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
+                            DETECTED_POSTGRES_URL="postgresql://${pg_user}:${pg_password}@${container_name}:5432/${pg_db}"
+                            EXTERNAL_NETWORKS+=("$postgres_network")
+                            success "可复用 PostgreSQL: ${container_name}:5432 (网络: $postgres_network)"
                         fi
+                        USE_EXTERNAL_POSTGRES=true
+                        return 0
                     else
-                        # 无端口映射，需要网络连接（仅脚本部署时有效）
-                        local postgres_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
-                        local auto_url="postgresql://${pg_user}:${pg_password}@${container_name}:5432/${pg_db}"
-                        warn "PostgreSQL 容器无端口映射，需要通过 Docker 网络连接"
-                        echo ""
-                        read -p "是否复用此 PostgreSQL? (注意: docker compose restart 后需重新运行脚本) (y/N): " reuse_pg
-                        if [[ "$reuse_pg" =~ ^[Yy]$ ]]; then
-                            DETECTED_POSTGRES_URL="$auto_url"
-                            USE_EXTERNAL_POSTGRES=true
-                            EXTERNAL_POSTGRES_NETWORK="$postgres_network"
-                            EXTERNAL_POSTGRES_CONTAINER="$container_name"
-                            success "可复用 PostgreSQL 容器: $container_name (网络: $postgres_network)"
-                            return 0
-                        else
-                            info "跳过复用，将启动新的 PostgreSQL 容器"
-                            return 1
-                        fi
+                        info "跳过复用，将启动新的 PostgreSQL 容器"
+                        return 1
                     fi
                 else
                     warn "连接验证失败，可能需要手动配置"
@@ -258,19 +274,28 @@ detect_docker_postgres() {
             fi
 
             # 如果自动识别失败，回退到手动输入
-            local docker_host=$(get_docker_host)
-            local host_port=$(get_container_host_port "$container_name" "5432")
-            local host_addr="${docker_host}:${host_port:-5432}"
             echo ""
             read -p "是否手动输入连接信息? (y/N): " reuse_pg
             if [[ "$reuse_pg" =~ ^[Yy]$ ]]; then
-                echo "请输入 PostgreSQL 连接字符串"
-                echo "格式: postgresql://用户名:密码@${host_addr}/数据库名"
+                local host_port=$(get_container_host_port "$container_name" "5432")
+                if [ -n "$host_port" ]; then
+                    local docker_host=$(get_docker_host)
+                    echo "请输入 PostgreSQL 连接字符串"
+                    echo "格式: postgresql://用户名:密码@${docker_host}:${host_port}/数据库名"
+                else
+                    echo "请输入 PostgreSQL 连接字符串"
+                    echo "格式: postgresql://用户名:密码@${container_name}:5432/数据库名"
+                fi
                 read -p "连接字符串: " pg_url
                 if [ -n "$pg_url" ]; then
                     DETECTED_POSTGRES_URL="$pg_url"
                     USE_EXTERNAL_POSTGRES=true
-                    success "将复用 PostgreSQL: $host_addr"
+                    # 如果没有端口映射，添加外部网络
+                    if [ -z "$host_port" ]; then
+                        local postgres_network=$(docker inspect -f '{{range $key, $val := .NetworkSettings.Networks}}{{$key}}{{end}}' "$container_name" 2>/dev/null | head -n 1)
+                        EXTERNAL_NETWORKS+=("$postgres_network")
+                    fi
+                    success "将复用 PostgreSQL"
                     return 0
                 fi
             fi
@@ -630,18 +655,6 @@ start_services() {
 
     success "服务启动中..."
 
-    # 如果使用外部 Redis，将应用容器连接到 Redis 所在网络
-    if [ "$USE_EXTERNAL_REDIS" = true ] && [ -n "$EXTERNAL_REDIS_NETWORK" ]; then
-        info "将应用容器连接到 Redis 网络: $EXTERNAL_REDIS_NETWORK"
-        docker network connect "$EXTERNAL_REDIS_NETWORK" newapi-model-check 2>/dev/null || warn "网络连接失败，可能已连接"
-    fi
-
-    # 如果使用外部 PostgreSQL，将应用容器连接到 PostgreSQL 所在网络
-    if [ "$USE_EXTERNAL_POSTGRES" = true ] && [ -n "$EXTERNAL_POSTGRES_NETWORK" ]; then
-        info "将应用容器连接到 PostgreSQL 网络: $EXTERNAL_POSTGRES_NETWORK"
-        docker network connect "$EXTERNAL_POSTGRES_NETWORK" newapi-model-check 2>/dev/null || warn "网络连接失败，可能已连接"
-    fi
-
     # 等待服务就绪
     info "等待服务就绪..."
     sleep 5
@@ -808,6 +821,7 @@ main() {
     fi
 
     setup_env "$mode"
+    generate_compose_override
     start_services "$rebuild"
     init_database
     show_result
