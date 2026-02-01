@@ -2,18 +2,36 @@
 -- 通常由 Prisma (npx prisma db push) 自动管理表结构
 -- 此脚本用于手动初始化或不使用 Prisma CLI 的场景
 
+-- 创建枚举类型（Prisma 需要原生 ENUM 类型）
+DO $$ BEGIN
+    CREATE TYPE "ChannelType" AS ENUM ('NEWAPI', 'DIRECT');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE "EndpointType" AS ENUM ('CHAT', 'CLAUDE', 'GEMINI', 'CODEX');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE "CheckStatus" AS ENUM ('SUCCESS', 'FAIL');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS "channels" (
   "id" TEXT NOT NULL,
   "name" VARCHAR(100) NOT NULL,
   "base_url" VARCHAR(500) NOT NULL,
   "api_key" TEXT NOT NULL,
-  "type" TEXT NOT NULL DEFAULT 'NEWAPI',
+  "type" "ChannelType" NOT NULL DEFAULT 'NEWAPI',
   "proxy" VARCHAR(500),
   "enabled" BOOLEAN NOT NULL DEFAULT true,
   "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY ("id"),
-  CONSTRAINT "channels_type_check" CHECK ("type" IN ('NEWAPI', 'DIRECT'))
+  PRIMARY KEY ("id")
 );
 
 CREATE TABLE IF NOT EXISTS "models" (
@@ -34,16 +52,14 @@ CREATE TABLE IF NOT EXISTS "models" (
 CREATE TABLE IF NOT EXISTS "check_logs" (
   "id" TEXT NOT NULL,
   "model_id" TEXT NOT NULL,
-  "endpoint_type" TEXT NOT NULL,
-  "status" TEXT NOT NULL,
+  "endpoint_type" "EndpointType" NOT NULL,
+  "status" "CheckStatus" NOT NULL,
   "latency" INTEGER,
   "status_code" INTEGER,
   "error_msg" TEXT,
   "response_content" TEXT,
   "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id"),
-  CONSTRAINT "check_logs_endpoint_type_check" CHECK ("endpoint_type" IN ('CHAT', 'CLAUDE', 'GEMINI', 'CODEX')),
-  CONSTRAINT "check_logs_status_check" CHECK ("status" IN ('SUCCESS', 'FAIL')),
   CONSTRAINT "check_logs_model_id_fkey" FOREIGN KEY ("model_id") REFERENCES "models"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
