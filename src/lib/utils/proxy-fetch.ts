@@ -44,6 +44,7 @@ function getSocksProxyAgent(proxyUrl: string): SocksProxyAgent {
 
 /**
  * Fetch using SOCKS proxy with native Node.js http/https
+ * Returns a streaming response for real-time data delivery
  */
 async function socksFetch(
   url: string | URL,
@@ -53,6 +54,12 @@ async function socksFetch(
   const urlObj = typeof url === "string" ? new URL(url) : url;
   const isHttps = urlObj.protocol === "https:";
   const httpModule = isHttps ? https : http;
+
+  // Check if already aborted
+  const signal = options?.signal as AbortSignal | undefined;
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }
 
   return new Promise((resolve, reject) => {
     const reqOptions: http.RequestOptions = {
@@ -65,36 +72,67 @@ async function socksFetch(
     };
 
     const req = httpModule.request(reqOptions, (res) => {
-      const chunks: Buffer[] = [];
-
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("end", () => {
-        const body = Buffer.concat(chunks);
-        const headers = new Headers();
-
-        // Convert Node.js headers to Headers object
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (value) {
-            if (Array.isArray(value)) {
-              value.forEach((v) => headers.append(key, v));
-            } else {
-              headers.set(key, value);
-            }
+      // Convert Node.js headers to Headers object
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (value) {
+          if (Array.isArray(value)) {
+            value.forEach((v) => headers.append(key, v));
+          } else {
+            headers.set(key, value);
           }
         }
+      }
 
-        // Create a Response-like object
-        const response = new Response(body, {
+      // Create a ReadableStream from the Node.js response for streaming support
+      const stream = new ReadableStream({
+        start(controller) {
+          res.on("data", (chunk: Buffer) => {
+            controller.enqueue(new Uint8Array(chunk));
+          });
+          res.on("end", () => {
+            cleanup();
+            controller.close();
+          });
+          res.on("error", (err) => {
+            cleanup();
+            controller.error(err);
+          });
+        },
+        cancel() {
+          res.destroy();
+        },
+      });
+
+      // Resolve immediately with streaming response
+      resolve(
+        new Response(stream, {
           status: res.statusCode || 200,
           statusText: res.statusMessage || "",
           headers,
-        });
-
-        resolve(response);
-      });
+        })
+      );
     });
 
-    req.on("error", reject);
+    // Handle abort signal
+    const onAbort = () => {
+      cleanup();
+      req.destroy();
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+
+    const cleanup = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    req.on("error", (err) => {
+      cleanup();
+      reject(err);
+    });
 
     // Handle request body
     if (options?.body) {

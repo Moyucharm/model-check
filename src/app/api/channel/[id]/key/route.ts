@@ -29,7 +29,6 @@ export async function GET(
 
     return NextResponse.json({ apiKey: channel.apiKey });
   } catch (error) {
-    console.error("[API] Get channel API key error:", error);
     return NextResponse.json(
       { error: "Failed to get API key", code: "FETCH_ERROR" },
       { status: 500 }

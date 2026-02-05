@@ -2,8 +2,27 @@
 
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 
-const JWT_SECRET = process.env.JWT_SECRET || "model-check-secret-key";
+// Auto-generated JWT secret (persists for the lifetime of the process)
+let generatedJwtSecret: string | null = null;
+
+/**
+ * Get JWT secret - from environment or auto-generated
+ * Similar to getProxyApiKey pattern for consistency
+ */
+function getJwtSecret(): string {
+  if (process.env.JWT_SECRET) {
+    return process.env.JWT_SECRET;
+  }
+
+  if (!generatedJwtSecret) {
+    generatedJwtSecret = randomBytes(32).toString("base64");
+  }
+
+  return generatedJwtSecret;
+}
+
 const JWT_EXPIRES_IN = "7d";
 
 export interface JWTPayload {
@@ -19,7 +38,6 @@ export async function authenticateAdmin(password: string): Promise<string | null
   const adminPassword = process.env.ADMIN_PASSWORD;
 
   if (!adminPassword) {
-    console.error("[Auth] ADMIN_PASSWORD not configured");
     return null;
   }
 
@@ -39,7 +57,7 @@ export async function authenticateAdmin(password: string): Promise<string | null
   }
 
   // Generate JWT token
-  const token = jwt.sign({ role: "admin" } as Omit<JWTPayload, "iat" | "exp">, JWT_SECRET, {
+  const token = jwt.sign({ role: "admin" } as Omit<JWTPayload, "iat" | "exp">, getJwtSecret(), {
     expiresIn: JWT_EXPIRES_IN,
   });
 
@@ -51,7 +69,7 @@ export async function authenticateAdmin(password: string): Promise<string | null
  */
 export function verifyToken(token: string): JWTPayload | null {
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as JWTPayload;
+    const payload = jwt.verify(token, getJwtSecret()) as JWTPayload;
     return payload;
   } catch {
     return null;

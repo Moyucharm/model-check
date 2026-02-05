@@ -13,6 +13,7 @@ interface ProgressEvent {
   latency?: number;
   timestamp?: number;
   message?: string;
+  isModelComplete?: boolean; // true when all endpoints for this model are done
 }
 
 interface UseSSEOptions {
@@ -61,7 +62,6 @@ export function useSSE(options: UseSSEOptions = {}) {
       // Reset retry state on successful connection
       retryCountRef.current = 0;
       reconnectDelayRef.current = INITIAL_RECONNECT_DELAY;
-      console.log("[SSE] Connected");
     };
 
     eventSource.onmessage = (event) => {
@@ -73,22 +73,23 @@ export function useSSE(options: UseSSEOptions = {}) {
           setIsConnected(true);
         }
 
+        // Log progress events for debugging
+        if (data.type === "progress") {
+        }
+
         // Call callback via ref (won't cause re-renders)
         onProgressRef.current?.(data);
       } catch (error) {
-        console.error("[SSE] Failed to parse message:", error);
       }
     };
 
     eventSource.onerror = () => {
-      console.error("[SSE] Connection error");
       setIsConnected(false);
       eventSource.close();
       eventSourceRef.current = null;
 
       // Check if we should retry
       if (retryCountRef.current >= maxRetries) {
-        console.error(`[SSE] Max retries (${maxRetries}) exceeded, stopping reconnection`);
         return;
       }
 
@@ -97,8 +98,6 @@ export function useSSE(options: UseSSEOptions = {}) {
       // Exponential backoff with jitter
       const jitter = Math.random() * 1000;
       const delay = Math.min(reconnectDelayRef.current + jitter, MAX_RECONNECT_DELAY);
-
-      console.log(`[SSE] Reconnecting in ${Math.round(delay)}ms (attempt ${retryCountRef.current}/${maxRetries})`);
 
       reconnectTimeoutRef.current = setTimeout(() => {
         connect();
@@ -119,7 +118,6 @@ export function useSSE(options: UseSSEOptions = {}) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
       setIsConnected(false);
-      console.log("[SSE] Disconnected");
     }
 
     // Reset retry state

@@ -13,6 +13,13 @@ interface StatusIndicatorProps {
   className?: string;
 }
 
+const statusLabels: Record<Status, string> = {
+  healthy: "健康",
+  partial: "部分可用",
+  unhealthy: "不可用",
+  unknown: "未知",
+};
+
 export function StatusIndicator({
   status,
   size = "md",
@@ -33,13 +40,18 @@ export function StatusIndicator({
   };
 
   return (
-    <span className={cn("relative inline-flex", className)}>
+    <span
+      className={cn("relative inline-flex", className)}
+      role="status"
+      aria-label={`状态: ${statusLabels[status]}`}
+    >
       <span
         className={cn(
           "rounded-full",
           sizeClasses[size],
           statusColors[status]
         )}
+        aria-hidden="true"
       />
       {pulse && status !== "unknown" && (
         <span
@@ -47,6 +59,7 @@ export function StatusIndicator({
             "absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping",
             statusColors[status]
           )}
+          aria-hidden="true"
         />
       )}
     </span>

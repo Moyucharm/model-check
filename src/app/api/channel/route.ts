@@ -3,8 +3,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth } from "@/lib/middleware/auth";
-import { EndpointType } from "@prisma/client";
-import { appendChannelToWebDAV, removeChannelFromWebDAV, isWebDAVConfigured } from "@/lib/webdav/sync";
 
 // GET /api/channel - List all channels (authenticated)
 export async function GET(request: NextRequest) {
@@ -29,7 +27,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ channels: maskedChannels });
   } catch (error) {
-    console.error("[API] List channels error:", error);
     return NextResponse.json(
       { error: "Failed to fetch channels", code: "FETCH_ERROR" },
       { status: 500 }
@@ -71,22 +68,8 @@ export async function POST(request: NextRequest) {
         data: models.map((modelName: string) => ({
           channelId: channel.id,
           modelName,
-          detectedEndpoints: [] as EndpointType[],
         })),
         skipDuplicates: true,
-      });
-    }
-
-    // Sync to WebDAV if configured (async, don't block response)
-    if (isWebDAVConfigured()) {
-      appendChannelToWebDAV({
-        name: channel.name,
-        baseUrl: channel.baseUrl,
-        apiKey: channel.apiKey,
-        proxy: channel.proxy,
-        enabled: channel.enabled,
-      }).catch((err) => {
-        console.error("[API] WebDAV append error:", err);
       });
     }
 
@@ -98,7 +81,6 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("[API] Create channel error:", error);
     return NextResponse.json(
       { error: "Failed to create channel", code: "CREATE_ERROR" },
       { status: 500 }
@@ -143,7 +125,6 @@ export async function PUT(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("[API] Update channel error:", error);
     return NextResponse.json(
       { error: "Failed to update channel", code: "UPDATE_ERROR" },
       { status: 500 }
@@ -170,7 +151,7 @@ export async function DELETE(request: NextRequest) {
     // Get channel info before deletion (for WebDAV sync)
     const channel = await prisma.channel.findUnique({
       where: { id },
-      select: { name: true, baseUrl: true, apiKey: true, proxy: true, enabled: true },
+      select: { id: true },
     });
 
     if (!channel) {
@@ -184,22 +165,8 @@ export async function DELETE(request: NextRequest) {
       where: { id },
     });
 
-    // Sync to WebDAV if configured (async, don't block response)
-    if (isWebDAVConfigured()) {
-      removeChannelFromWebDAV({
-        name: channel.name,
-        baseUrl: channel.baseUrl,
-        apiKey: channel.apiKey,
-        proxy: channel.proxy,
-        enabled: channel.enabled,
-      }).catch((err) => {
-        console.error("[API] WebDAV remove error:", err);
-      });
-    }
-
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("[API] Delete channel error:", error);
     return NextResponse.json(
       { error: "Failed to delete channel", code: "DELETE_ERROR" },
       { status: 500 }

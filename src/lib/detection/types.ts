@@ -1,6 +1,6 @@
 // Detection system type definitions
 
-import { EndpointType, CheckStatus } from "@prisma/client";
+import { EndpointType, CheckStatus } from "@/generated/prisma";
 
 // Endpoint type detection result
 export interface EndpointDetection {
@@ -49,6 +49,12 @@ export interface ChannelWithModels {
   models: {
     id: string;
     modelName: string;
-    detectedEndpoints: EndpointType[] | null;
+    detectedEndpoints: string[];
   }[];
+}
+
+// Result of fetching models from /v1/models
+export interface FetchModelsResult {
+  models: string[];
+  error?: string;
 }

@@ -22,7 +22,6 @@ export async function POST(
       ...result,
     });
   } catch (error) {
-    console.error("[API] Sync models error:", error);
     const message = error instanceof Error ? error.message : "Failed to sync models";
     return NextResponse.json(
       { error: message, code: "SYNC_ERROR" },

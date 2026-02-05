@@ -50,7 +50,6 @@ export async function GET() {
         : null,
     });
   } catch (error) {
-    console.error("[API] Status error:", error);
     return NextResponse.json(
       {
         status: "error",

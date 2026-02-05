@@ -3,11 +3,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/middleware/auth";
 import {
-  startAllCrons,
+  startAllCronsWithConfig,
   stopAllCrons,
   getCronStatus,
   cleanupOldLogs,
-  startDetectionCron,
+  startDetectionCronWithConfig,
   startCleanupCron,
 } from "@/lib/scheduler";
 
@@ -17,7 +17,6 @@ export async function GET() {
     const status = getCronStatus();
     return NextResponse.json(status);
   } catch (error) {
-    console.error("[API] Scheduler status error:", error);
     return NextResponse.json(
       { error: "Failed to get scheduler status", code: "STATUS_ERROR" },
       { status: 500 }
@@ -36,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case "start":
-        startAllCrons();
+        await startAllCronsWithConfig();
         return NextResponse.json({
           success: true,
           message: "All cron jobs started",
@@ -52,7 +51,7 @@ export async function POST(request: NextRequest) {
         });
 
       case "start-detection":
-        startDetectionCron();
+        await startDetectionCronWithConfig();
         return NextResponse.json({
           success: true,
           message: "Detection cron started",
@@ -85,7 +84,6 @@ export async function POST(request: NextRequest) {
         );
     }
   } catch (error) {
-    console.error("[API] Scheduler control error:", error);
     return NextResponse.json(
       { error: "Failed to control scheduler", code: "SCHEDULER_ERROR" },
       { status: 500 }

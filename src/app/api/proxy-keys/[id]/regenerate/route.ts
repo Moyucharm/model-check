@@ -54,7 +54,6 @@ export async function POST(
       },
     });
   } catch (error) {
-    console.error("[API] Regenerate proxy key error:", error);
     return NextResponse.json(
       { error: "Failed to regenerate proxy key", code: "REGENERATE_ERROR" },
       { status: 500 }

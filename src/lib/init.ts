@@ -1,7 +1,7 @@
 // Application initialization - Start worker and scheduler
 
 import { startWorker, isWorkerRunning } from "@/lib/queue/worker";
-import { startAllCrons, getCronStatus } from "@/lib/scheduler";
+import { startAllCronsWithConfig, getCronStatus } from "@/lib/scheduler";
 
 let initialized = false;
 
@@ -9,32 +9,23 @@ let initialized = false;
  * Initialize background services
  * Should be called once on application startup
  */
-export function initializeServices(): void {
+export async function initializeServices(): Promise<void> {
   if (initialized) {
-    console.log("[Init] Services already initialized");
     return;
   }
-
-  console.log("[Init] Starting background services...");
 
   // Start worker
   if (!isWorkerRunning()) {
     startWorker();
-    console.log("[Init] Worker started");
   }
 
-  // Start cron jobs
-  startAllCrons();
-  console.log("[Init] Cron jobs started");
+  // Start cron jobs (load config from database)
+  await startAllCronsWithConfig();
 
   initialized = true;
 
   // Log status
   const cronStatus = getCronStatus();
-  console.log("[Init] Services initialized:", {
-    worker: isWorkerRunning(),
-    cron: cronStatus,
-  });
 }
 
 /**

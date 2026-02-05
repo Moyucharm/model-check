@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth } from "@/lib/middleware/auth";
 import { syncChannelModels } from "@/lib/queue/service";
+import { appendChannelToWebDAV, updateChannelInWebDAV, syncAllChannelsToWebDAV, isWebDAVConfigured } from "@/lib/webdav/sync";
 import type { ChannelExportData } from "../export/route";
 
 // POST /api/channel/import - Import channels
@@ -44,6 +45,16 @@ export async function POST(request: NextRequest) {
     let skipped = 0;
     let duplicates = 0;
     const importedChannelIds: string[] = [];
+
+    // Track channels for WebDAV sync
+    const channelsToSync: Array<{
+      name: string;
+      baseUrl: string;
+      apiKey: string;
+      proxy: string | null;
+      enabled: boolean;
+      action: "create" | "update";
+    }> = [];
 
     // If replace mode, delete all existing channels first
     if (mode === "replace") {
@@ -103,6 +114,15 @@ export async function POST(request: NextRequest) {
           });
           importedChannelIds.push(existing.id);
           updated++;
+          // Track for WebDAV sync
+          channelsToSync.push({
+            name: existing.name,
+            baseUrl: normalizedBaseUrl,
+            apiKey: ch.apiKey,
+            proxy: ch.proxy || null,
+            enabled: ch.enabled ?? true,
+            action: "update",
+          });
         } else {
           skipped++;
         }
@@ -119,6 +139,15 @@ export async function POST(request: NextRequest) {
         });
         importedChannelIds.push(newChannel.id);
         imported++;
+        // Track for WebDAV sync
+        channelsToSync.push({
+          name: newChannel.name,
+          baseUrl: normalizedBaseUrl,
+          apiKey: ch.apiKey,
+          proxy: ch.proxy || null,
+          enabled: ch.enabled ?? true,
+          action: "create",
+        });
       }
     }
 
@@ -140,10 +169,35 @@ export async function POST(request: NextRequest) {
           if (result.status === "fulfilled") {
             syncedModels += result.value.added;
           } else {
-            console.error(`[API] Sync models error for channel ${batch[j]}:`, result.reason);
             syncErrors.push(batch[j]);
           }
         }
+      }
+    }
+
+    // Sync to WebDAV if configured
+    let webdavStatus = { synced: false, error: null as string | null };
+    if (isWebDAVConfigured() && channelsToSync.length > 0) {
+      try {
+        if (mode === "replace") {
+          // For replace mode, sync all channels at once
+          const allChannels = await prisma.channel.findMany({
+            select: { name: true, baseUrl: true, apiKey: true, proxy: true, enabled: true },
+          });
+          await syncAllChannelsToWebDAV(allChannels);
+        } else {
+          // For merge mode, sync each channel individually
+          for (const ch of channelsToSync) {
+            if (ch.action === "create") {
+              await appendChannelToWebDAV(ch);
+            } else {
+              await updateChannelInWebDAV(ch);
+            }
+          }
+        }
+        webdavStatus.synced = true;
+      } catch (err) {
+        webdavStatus.error = err instanceof Error ? err.message : "WebDAV sync failed";
       }
     }
 
@@ -156,9 +210,9 @@ export async function POST(request: NextRequest) {
       total: channelsToImport.length,
       syncedModels,
       syncErrors: syncErrors.length > 0 ? syncErrors : undefined,
+      webdav: webdavStatus,
     });
   } catch (error) {
-    console.error("[API] Import channels error:", error);
     return NextResponse.json(
       { error: "Failed to import channels", code: "IMPORT_ERROR" },
       { status: 500 }

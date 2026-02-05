@@ -2,14 +2,15 @@
 
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Summary } from "@/components/dashboard/summary";
 import { ChannelCard } from "@/components/dashboard/channel-card";
 import { ChannelManager } from "@/components/dashboard/channel-manager";
 import { ProxyKeyManager } from "@/components/dashboard/proxy-key-manager";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useToast } from "@/components/ui/toast";
-import { Loader2 } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface CheckLog {
   id: string;
@@ -39,6 +40,13 @@ interface Channel {
   models: Model[];
 }
 
+interface Pagination {
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  totalChannels: number;
+}
+
 interface DashboardData {
   authenticated: boolean;
   summary: {
@@ -47,6 +55,7 @@ interface DashboardData {
     healthyModels: number;
     healthRate: number;
   };
+  pagination: Pagination;
   channels: Channel[];
 }
 
@@ -66,6 +75,8 @@ interface DashboardProps {
   onStopModels?: (modelIds: string[]) => void;
 }
 
+const PAGE_SIZE = 10;
+
 export function Dashboard({
   refreshKey = 0,
   search = "",
@@ -78,10 +89,17 @@ export function Dashboard({
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const { isAuthenticated, token } = useAuth();
   const { toast, update } = useToast();
 
-  const fetchData = useCallback(async (signal?: AbortSignal) => {
+  const fetchData = useCallback(async (
+    signal?: AbortSignal,
+    page: number = 1,
+    searchQuery: string = "",
+    endpoint: EndpointFilter = "all",
+    status: StatusFilter = "all"
+  ) => {
     try {
       const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = {};
@@ -89,7 +107,23 @@ export function Dashboard({
         headers.Authorization = `Bearer ${token}`;
       }
 
-      const response = await fetch("/api/dashboard", { headers, signal });
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(PAGE_SIZE),
+      });
+
+      // Add filter parameters to API request
+      if (searchQuery) {
+        params.set("search", searchQuery);
+      }
+      if (endpoint !== "all") {
+        params.set("endpointFilter", endpoint);
+      }
+      if (status !== "all") {
+        params.set("statusFilter", status);
+      }
+
+      const response = await fetch(`/api/dashboard?${params}`, { headers, signal });
       if (!response.ok) {
         throw new Error("获取数据失败");
       }
@@ -131,52 +165,59 @@ export function Dashboard({
         throw new Error("删除渠道失败");
       }
       update(toastId, "渠道已删除", "success");
-      fetchData();
+      fetchData(undefined, currentPage, search, endpointFilter, statusFilter);
     } catch (err) {
       update(toastId, err instanceof Error ? err.message : "删除失败", "error");
     }
-  }, [token, toast, update, fetchData]);
+  }, [token, toast, update, fetchData, currentPage, search, endpointFilter, statusFilter]);
 
-  // Fetch data on mount and when refreshKey changes (SSE triggers)
+  // Page change handler
+  const handlePageChange = useCallback((newPage: number) => {
+    setCurrentPage(newPage);
+    setLoading(true);
+    fetchData(undefined, newPage, search, endpointFilter, statusFilter);
+  }, [fetchData, search, endpointFilter, statusFilter]);
+
+  // Track previous values to detect changes
+  const prevFiltersRef = useRef({ search, endpointFilter, statusFilter });
+  const currentPageRef = useRef(currentPage);
+
+  // Keep page ref in sync
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  // Fetch data on mount, refreshKey change, or filter changes
   useEffect(() => {
     const controller = new AbortController();
-    fetchData(controller.signal);
-    return () => controller.abort();
-  }, [fetchData, refreshKey]);
+    const prevFilters = prevFiltersRef.current;
+    const filtersChanged =
+      prevFilters.search !== search ||
+      prevFilters.endpointFilter !== endpointFilter ||
+      prevFilters.statusFilter !== statusFilter;
 
-  // Filter and sort channels - default sort by status
-  const filteredChannels = useMemo(() => {
+    // Update previous filters
+    prevFiltersRef.current = { search, endpointFilter, statusFilter };
+
+    // Reset to page 1 only when filters change, not on refreshKey change
+    let pageToFetch = currentPageRef.current;
+    if (filtersChanged) {
+      pageToFetch = 1;
+      setCurrentPage(1);
+    }
+
+    fetchData(controller.signal, pageToFetch, search, endpointFilter, statusFilter);
+    return () => controller.abort();
+  }, [fetchData, refreshKey, search, endpointFilter, statusFilter]);
+
+  // Sort channels - filtering is now done server-side
+  const sortedChannels = useMemo(() => {
     if (!data?.channels) return [];
 
     return data.channels
       .map((channel) => {
-        // Filter models within channel
-        const filteredModels = channel.models.filter((model) => {
-          // Search filter
-          if (search && !model.modelName.toLowerCase().includes(search.toLowerCase())) {
-            return false;
-          }
-
-          // Endpoint filter - only filter if model has detected endpoints
-          if (endpointFilter !== "all") {
-            const endpoints = model.detectedEndpoints || [];
-            if (endpoints.length === 0 || !endpoints.includes(endpointFilter)) {
-              return false;
-            }
-          }
-
-          // Status filter
-          if (statusFilter !== "all") {
-            if (statusFilter === "healthy" && model.lastStatus !== true) return false;
-            if (statusFilter === "unhealthy" && model.lastStatus !== false) return false;
-            if (statusFilter === "unknown" && model.lastStatus !== null) return false;
-          }
-
-          return true;
-        });
-
         // Sort models by status (healthy first, then unhealthy, then unknown)
-        const sortedModels = [...filteredModels].sort((a, b) => {
+        const sortedModels = [...channel.models].sort((a, b) => {
           const statusA = a.lastStatus === true ? 0 : a.lastStatus === false ? 1 : 2;
           const statusB = b.lastStatus === true ? 0 : b.lastStatus === false ? 1 : 2;
           return statusA - statusB;
@@ -185,9 +226,9 @@ export function Dashboard({
         return { ...channel, models: sortedModels };
       })
       .filter((channel) => channel.models.length > 0);
-  }, [data?.channels, search, endpointFilter, statusFilter]);
+  }, [data?.channels]);
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -200,7 +241,7 @@ export function Dashboard({
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
         <p className="text-destructive">{error}</p>
         <button
-          onClick={() => fetchData()}
+          onClick={() => fetchData(undefined, currentPage)}
           className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
         >
           重试
@@ -213,10 +254,13 @@ export function Dashboard({
     return null;
   }
 
+  const { pagination } = data;
+  const totalPages = pagination?.totalPages || 1;
+
   return (
     <div className="space-y-6">
       {/* Channel Manager (admin only) */}
-      {isAuthenticated && <ChannelManager onUpdate={fetchData} />}
+      {isAuthenticated && <ChannelManager onUpdate={() => fetchData(undefined, currentPage, search, endpointFilter, statusFilter)} />}
 
       {/* Proxy Key Manager (admin only) */}
       {isAuthenticated && <ProxyKeyManager />}
@@ -225,23 +269,97 @@ export function Dashboard({
       <Summary data={data.summary} />
 
       {/* Channels List */}
-      {filteredChannels.length === 0 ? (
+      {sortedChannels.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           {data.channels.length === 0 ? "暂无渠道配置" : "没有匹配的结果"}
         </div>
       ) : (
         <div className="grid gap-4">
-          {filteredChannels.map((channel) => (
+          {sortedChannels.map((channel) => (
             <ChannelCard
               key={channel.id}
               channel={channel}
-              onRefresh={fetchData}
+              onRefresh={() => fetchData(undefined, currentPage, search, endpointFilter, statusFilter)}
               onDelete={handleDeleteChannel}
               testingModelIds={testingModelIds}
               onTestModels={onTestModels}
               onStopModels={onStopModels}
             />
           ))}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-4">
+          <button
+            onClick={() => handlePageChange(currentPage - 1)}
+            disabled={currentPage <= 1 || loading}
+            className={cn(
+              "flex items-center gap-1 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+              currentPage <= 1 || loading
+                ? "text-muted-foreground cursor-not-allowed"
+                : "text-foreground hover:bg-accent"
+            )}
+          >
+            <ChevronLeft className="h-4 w-4" />
+            上一页
+          </button>
+
+          <div className="flex items-center gap-1">
+            {/* Show page numbers */}
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((page) => {
+                // Show first, last, current, and adjacent pages
+                if (page === 1 || page === totalPages) return true;
+                if (Math.abs(page - currentPage) <= 1) return true;
+                return false;
+              })
+              .map((page, index, arr) => {
+                // Add ellipsis if there's a gap
+                const prevPage = arr[index - 1];
+                const showEllipsis = prevPage && page - prevPage > 1;
+
+                return (
+                  <span key={page} className="flex items-center">
+                    {showEllipsis && (
+                      <span className="px-2 text-muted-foreground">...</span>
+                    )}
+                    <button
+                      onClick={() => handlePageChange(page)}
+                      disabled={loading}
+                      className={cn(
+                        "min-w-[36px] h-9 px-3 rounded-md text-sm font-medium transition-colors",
+                        page === currentPage
+                          ? "bg-primary text-primary-foreground"
+                          : "hover:bg-accent text-foreground"
+                      )}
+                    >
+                      {page}
+                    </button>
+                  </span>
+                );
+              })}
+          </div>
+
+          <button
+            onClick={() => handlePageChange(currentPage + 1)}
+            disabled={currentPage >= totalPages || loading}
+            className={cn(
+              "flex items-center gap-1 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+              currentPage >= totalPages || loading
+                ? "text-muted-foreground cursor-not-allowed"
+                : "text-foreground hover:bg-accent"
+            )}
+          >
+            下一页
+            <ChevronRight className="h-4 w-4" />
+          </button>
+
+          {/* Page info */}
+          <span className="text-sm text-muted-foreground ml-4">
+            第 {currentPage} / {totalPages} 页，共 {pagination.totalChannels} 个渠道
+          </span>
         </div>
       )}
     </div>

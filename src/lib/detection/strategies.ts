@@ -1,7 +1,7 @@
 // Detection Strategy Factory
 // Routes requests to correct endpoint based on model name
 
-import { EndpointType } from "@prisma/client";
+import { EndpointType } from "@/generated/prisma";
 import type { EndpointDetection } from "./types";
 
 // Default detection prompt
@@ -23,14 +23,9 @@ export function detectCliEndpointType(modelName: string): EndpointType | null {
   }
 
   // OpenAI Responses API (2025+):
-  // - gpt-4o series (gpt-4o, gpt-4o-mini, etc.)
-  // - gpt-5 series (gpt-5, gpt-5.1, gpt-5.2, etc.)
-  // - o1, o3, o4 reasoning models
-  if (
-    /gpt-4o/.test(name) ||
-    /gpt-5/.test(name) ||
-    /^o[134](-|$)/.test(name)
-  ) {
+  // Only gpt-5.1 and gpt-5.2 series use the new Responses API (CODEX)
+  // gpt-4o, gpt-4, o1, o3, etc. still use Chat Completions API
+  if (/gpt-5\.[12]/.test(name)) {
     return EndpointType.CODEX;
   }
 

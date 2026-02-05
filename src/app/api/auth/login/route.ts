@@ -30,7 +30,6 @@ export async function POST(request: NextRequest) {
       expiresIn: "7d",
     });
   } catch (error) {
-    console.error("[API] Login error:", error);
     return NextResponse.json(
       { error: "Internal server error", code: "SERVER_ERROR" },
       { status: 500 }

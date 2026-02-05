@@ -1,8 +1,9 @@
 // GET /api/sse/progress - Server-Sent Events for detection progress
+// Uses direct Redis subscription for reliability
 
 import { NextRequest } from "next/server";
 import Redis from "ioredis";
-import { PROGRESS_CHANNEL } from "@/lib/queue/worker";
+import { PROGRESS_CHANNEL } from "@/lib/queue/constants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -10,17 +11,10 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   const encoder = new TextEncoder();
 
-  // Create a new Redis subscriber connection
-  const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-  const subscriber = new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-    lazyConnect: true,
-  });
-
   let isConnected = true;
   let isCleanedUp = false;
   let heartbeatInterval: NodeJS.Timeout | null = null;
+  let subscriber: Redis | null = null;
 
   // Unified cleanup function to prevent double cleanup
   const cleanup = () => {
@@ -33,74 +27,52 @@ export async function GET(request: NextRequest) {
       heartbeatInterval = null;
     }
 
-    // Use disconnect() instead of quit() - it's synchronous and doesn't throw on closed connections
-    try {
-      subscriber.disconnect(false);
-    } catch {
-      // Ignore errors on already closed connections
+    if (subscriber) {
+      subscriber.unsubscribe().catch(() => {});
+      subscriber.quit().catch(() => {});
+      subscriber = null;
     }
   };
 
   const stream = new ReadableStream({
     async start(controller) {
-      // Connect to Redis
-      try {
-        await subscriber.connect();
-      } catch (error) {
-        console.error("[SSE] Redis connection failed:", error);
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ type: "error", message: "Redis connection failed" })}\n\n`)
-        );
-        controller.close();
-        return;
-      }
-
       // Send initial connection message
       controller.enqueue(
         encoder.encode(`data: ${JSON.stringify({ type: "connected", timestamp: Date.now() })}\n\n`)
       );
 
-      // Subscribe to progress channel
-      await subscriber.subscribe(PROGRESS_CHANNEL);
+      try {
+        // Create dedicated Redis connection for this SSE client
+        const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+        subscriber = new Redis(redisUrl, {
+          maxRetriesPerRequest: null,
+          enableReadyCheck: false,
+        });
 
-      // Handle incoming messages
-      subscriber.on("message", (channel, message) => {
-        if (!isConnected) return;
+        subscriber.on("error", (err) => {
+        });
 
-        try {
-          const data = JSON.parse(message);
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ type: "progress", ...data })}\n\n`)
-          );
-        } catch (error) {
-          console.error("[SSE] Failed to parse message:", error);
-        }
-      });
+        // Handle messages
+        subscriber.on("message", (channel, message) => {
+          if (!isConnected || channel !== PROGRESS_CHANNEL) return;
 
-      // Handle Redis errors - suppress EPIPE/closed connection errors during cleanup
-      subscriber.on("error", (error) => {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (isCleanedUp || code === "EPIPE" || error.message?.includes("Connection is closed")) {
-          return;
-        }
-        console.error("[SSE] Redis error:", error);
-        if (isConnected) {
           try {
+            const data = JSON.parse(message);
             controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "error", message: "Redis connection error" })}\n\n`
-              )
+              encoder.encode(`data: ${JSON.stringify({ type: "progress", ...data })}\n\n`)
             );
-          } catch {
-            // Controller might be closed
+          } catch (error) {
           }
-        }
-      });
+        });
 
-      // Handle Redis connection close
-      subscriber.on("close", () => {
-        cleanup();
-      });
+        // Subscribe to progress channel
+        await subscriber.subscribe(PROGRESS_CHANNEL);
+
+      } catch (error) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ type: "error", message: "Failed to connect to Redis" })}\n\n`)
+        );
+      }
 
       // Keep connection alive with heartbeat
       heartbeatInterval = setInterval(() => {

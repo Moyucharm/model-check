@@ -17,7 +17,7 @@
 #
 # 示例:
 #   ./deploy.sh --local        # 最简单，全部本地运行
-#   ./deploy.sh --cloud-db     # 使用 Supabase/Neon/TiDB 等云数据库
+#   ./deploy.sh --cloud-db     # 使用 Supabase/Neon 等云数据库
 #   ./deploy.sh --cloud        # 数据库和 Redis 都用云端
 #   ./deploy.sh --quick        # 快速部署，跳过可选配置
 
@@ -105,7 +105,7 @@ check_port_conflicts() {
 show_banner() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════╗"
-    echo "║       Model Check - 一键部署脚本             ║"
+    echo "║       Model Check - 一键部署脚本                ║"
     echo "║  https://github.com/chxcodepro/model-check   ║"
     echo "╚══════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -133,7 +133,6 @@ show_help() {
     echo ""
     echo "云服务推荐:"
     echo "  PostgreSQL: Supabase (免费), Neon (免费)"
-    echo "  TiDB:       TiDB Cloud (免费额度)"
     echo "  Redis:      Upstash (免费), Redis Cloud"
     echo ""
     echo "主要功能:"
@@ -168,6 +167,19 @@ do_update() {
     # 重启服务
     info "重启服务..."
     $compose_cmd up -d --build
+
+    # 初始化数据库（本地 PostgreSQL 容器）
+    if docker ps --format '{{.Names}}' | grep -q "model-check-postgres"; then
+        info "等待数据库就绪..."
+        sleep 5
+
+        info "同步数据库表结构..."
+        if cat prisma/init.postgresql.sql | $compose_cmd exec -T postgres psql -U modelcheck -d model_check; then
+            success "数据库同步完成"
+        else
+            warn "数据库同步失败，可能表已存在（可忽略）"
+        fi
+    fi
 
     success "更新完成！"
     echo ""
@@ -423,7 +435,6 @@ setup_env() {
         echo "支持的格式:"
         echo "  Supabase:  postgresql://postgres:password@db.xxx.supabase.co:5432/postgres"
         echo "  Neon:      postgresql://user:password@xxx.neon.tech/neondb?sslmode=require"
-        echo "  TiDB:      mysql://user:password@gateway.tidbcloud.com:4000/dbname"
         echo ""
         read -p "数据库连接字符串: " db_url
         if [ -n "$db_url" ]; then
@@ -541,14 +552,15 @@ start_services() {
         $compose_cmd up -d --build
     else
         info "拉取预构建镜像..."
-        $compose_cmd pull app 2>/dev/null || warn "无法拉取镜像，将使用本地构建"
-        $compose_cmd up -d
+        if $compose_cmd pull app 2>/dev/null; then
+            $compose_cmd up -d
+        else
+            error "无法拉取镜像，已中止启动"
+        fi
     fi
 
     success "服务启动中..."
 
-    # 等待服务就绪
-    info "等待服务就绪..."
     sleep 5
 
     # 检查应用容器状态
@@ -610,7 +622,8 @@ init_database() {
     else
         # 云数据库模式，跳过自动初始化
         warn "未检测到本地 PostgreSQL 容器（云数据库模式）"
-        info "请手动执行数据库初始化: psql < prisma/init.postgresql.sql"
+        info "请手动执行数据库初始化:"
+        echo "  psql \$DATABASE_URL < prisma/init.postgresql.sql"
     fi
 }
 

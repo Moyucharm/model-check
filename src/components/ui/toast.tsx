@@ -3,10 +3,10 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, ReactNode } from "react";
-import { X, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { X, CheckCircle, XCircle, Loader2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type ToastType = "success" | "error" | "loading";
+type ToastType = "success" | "error" | "loading" | "warning";
 
 interface Toast {
   id: string;
@@ -71,11 +71,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   "flex items-center gap-3 px-6 py-4 rounded-xl shadow-2xl border-2 backdrop-blur-md animate-in zoom-in-95 fade-in duration-200",
                   t.type === "loading" && "border-blue-500/50 bg-blue-500/20 text-blue-600 dark:text-blue-400",
                   t.type === "success" && "border-green-500/50 bg-green-500/20 text-green-600 dark:text-green-400",
-                  t.type === "error" && "border-red-500/50 bg-red-500/20 text-red-600 dark:text-red-400"
+                  t.type === "error" && "border-red-500/50 bg-red-500/20 text-red-600 dark:text-red-400",
+                  t.type === "warning" && "border-yellow-500/50 bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
                 )}
               >
                 {t.type === "success" && <CheckCircle className="h-5 w-5 shrink-0" />}
                 {t.type === "error" && <XCircle className="h-5 w-5 shrink-0" />}
+                {t.type === "warning" && <AlertTriangle className="h-5 w-5 shrink-0" />}
                 {t.type === "loading" && <Loader2 className="h-5 w-5 shrink-0 animate-spin" />}
                 <span className="text-base font-medium">{t.message}</span>
                 {t.type !== "loading" && (

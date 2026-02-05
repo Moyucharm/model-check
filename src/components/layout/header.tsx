@@ -41,6 +41,9 @@ interface HeaderProps {
   onEndpointFilterChange?: (value: EndpointFilter) => void;
   statusFilter?: StatusFilter;
   onStatusFilterChange?: (value: StatusFilter) => void;
+  // Detection callbacks
+  onDetectionStart?: () => void;
+  onDetectionStop?: () => void;
 }
 
 // Worker configuration (matching worker.ts)
@@ -58,6 +61,8 @@ export function Header({
   onEndpointFilterChange,
   statusFilter = "all",
   onStatusFilterChange,
+  onDetectionStart,
+  onDetectionStop,
 }: HeaderProps) {
   const { resolvedTheme, setTheme } = useTheme();
   const { isAuthenticated, token, logout } = useAuth();
@@ -86,26 +91,28 @@ export function Header({
   }, [showFilters]);
 
   // Fetch scheduler status
+  const fetchSchedulerStatus = async () => {
+    try {
+      const response = await fetch("/api/scheduler");
+      if (response.ok) {
+        const data = await response.json();
+        setSchedulerStatus(data);
+      }
+    } catch (error) {
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
 
-    const fetchSchedulerStatus = async () => {
-      try {
-        const response = await fetch("/api/scheduler");
-        if (response.ok && isMounted) {
-          const data = await response.json();
-          setSchedulerStatus(data);
-        }
-      } catch (error) {
-        if (isMounted) {
-          console.error("Failed to fetch scheduler status:", error);
-        }
-      }
+    const fetchStatus = async () => {
+      if (!isMounted) return;
+      await fetchSchedulerStatus();
     };
 
-    fetchSchedulerStatus();
+    fetchStatus();
     // Refresh every minute
-    const interval = setInterval(fetchSchedulerStatus, 60000);
+    const interval = setInterval(fetchStatus, 60000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -156,6 +163,8 @@ export function Header({
     if (isDetecting) return;
 
     setIsDetecting(true);
+    // Immediately notify parent that detection is starting
+    onDetectionStart?.();
     const toastId = toast("正在启动全量检测...", "loading");
 
     try {
@@ -174,9 +183,13 @@ export function Header({
         update(toastId, data.message || "检测已启动", "success");
       } else {
         update(toastId, data.error || "启动检测失败", "error");
+        // If failed, notify parent to stop
+        onDetectionStop?.();
       }
     } catch {
       update(toastId, "网络错误", "error");
+      // If failed, notify parent to stop
+      onDetectionStop?.();
     } finally {
       setIsDetecting(false);
     }
@@ -200,6 +213,8 @@ export function Header({
 
       if (response.ok) {
         update(toastId, data.message || "检测已停止", "success");
+        // Notify parent that detection stopped
+        onDetectionStop?.();
       } else {
         update(toastId, data.error || "停止检测失败", "error");
       }
@@ -509,6 +524,7 @@ export function Header({
     <SchedulerModal
       isOpen={showSchedulerModal}
       onClose={() => setShowSchedulerModal(false)}
+      onSave={fetchSchedulerStatus}
     />
     </>
   );

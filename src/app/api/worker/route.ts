@@ -60,7 +60,6 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   } catch (error) {
-    console.error("[API] Worker control error:", error);
     return NextResponse.json(
       { error: "Failed to control worker", code: "WORKER_ERROR" },
       { status: 500 }

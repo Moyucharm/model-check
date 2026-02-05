@@ -115,13 +115,11 @@ async function readRemoteData(config: WebDAVConfig): Promise<WebDAVExportData | 
     }
 
     if (!response.ok) {
-      console.error(`[WebDAV Sync] Failed to read remote: ${response.status}`);
       return null;
     }
 
     return await response.json() as WebDAVExportData;
   } catch (error) {
-    console.error("[WebDAV Sync] Error reading remote:", error);
     return null;
   }
 }
@@ -141,104 +139,209 @@ async function writeRemoteData(config: WebDAVConfig, data: WebDAVExportData): Pr
     });
 
     if (!response.ok && response.status !== 201 && response.status !== 204) {
-      console.error(`[WebDAV Sync] Failed to write remote: ${response.status}`);
       return false;
     }
 
     return true;
   } catch (error) {
-    console.error("[WebDAV Sync] Error writing remote:", error);
     return false;
   }
 }
 
 /**
+ * Generate a unique channel name by appending numeric suffix
+ * Example: "channel" -> "channel-1" -> "channel-2" ...
+ */
+function generateUniqueName(baseName: string, existingNames: Set<string>): string {
+  if (!existingNames.has(baseName)) {
+    return baseName;
+  }
+
+  let suffix = 1;
+  while (existingNames.has(`${baseName}-${suffix}`)) {
+    suffix++;
+  }
+  return `${baseName}-${suffix}`;
+}
+
+/**
  * Append a channel to WebDAV (called after channel creation)
- * Only appends if the channel doesn't already exist (by baseUrl+apiKey)
+ * If a channel with same baseUrl+apiKey exists, overwrite it
  */
 export async function appendChannelToWebDAV(channel: ChannelData): Promise<void> {
   const config = getWebDAVConfig();
   if (!config) {
-    console.log("[WebDAV Sync] Not configured, skipping append");
     return;
   }
 
-  try {
-    const remoteData = await readRemoteData(config);
-    if (!remoteData) {
-      console.error("[WebDAV Sync] Failed to read remote data for append");
-      return;
-    }
+  const remoteData = await readRemoteData(config);
+  if (!remoteData) {
+    throw new Error("Failed to read remote data for append");
+  }
 
-    // Check if channel already exists by baseUrl+apiKey
-    const channelKey = `${channel.baseUrl.replace(/\/$/, "")}|${channel.apiKey}`;
-    const existingKeys = new Set(
-      remoteData.channels.map((ch) => `${ch.baseUrl.replace(/\/$/, "")}|${ch.apiKey}`)
-    );
+  const channelKey = `${channel.baseUrl.replace(/\/$/, "")}|${channel.apiKey}`;
 
-    if (existingKeys.has(channelKey)) {
-      console.log("[WebDAV Sync] Channel already exists in remote, skipping append");
-      return;
-    }
+  // Check if channel with same baseUrl+apiKey already exists
+  const existingIndex = remoteData.channels.findIndex((ch) => {
+    const key = `${ch.baseUrl.replace(/\/$/, "")}|${ch.apiKey}`;
+    return key === channelKey;
+  });
 
-    // Append channel
-    remoteData.channels.push({
+  if (existingIndex >= 0) {
+    // Overwrite existing entry
+    remoteData.channels[existingIndex] = {
       name: channel.name,
       baseUrl: channel.baseUrl.replace(/\/$/, ""),
       apiKey: channel.apiKey,
       proxy: channel.proxy || null,
       enabled: channel.enabled ?? true,
-    });
-    remoteData.exportedAt = new Date().toISOString();
+    };
+  } else {
+    // New channel - check for name conflict
+    const existingNames = new Set(remoteData.channels.map((ch) => ch.name));
+    const finalName = generateUniqueName(channel.name, existingNames);
 
-    const success = await writeRemoteData(config, remoteData);
-    if (success) {
-      console.log(`[WebDAV Sync] Channel "${channel.name}" appended to remote`);
-    }
-  } catch (error) {
-    console.error("[WebDAV Sync] Error appending channel:", error);
+    remoteData.channels.push({
+      name: finalName,
+      baseUrl: channel.baseUrl.replace(/\/$/, ""),
+      apiKey: channel.apiKey,
+      proxy: channel.proxy || null,
+      enabled: channel.enabled ?? true,
+    });
+  }
+
+  remoteData.exportedAt = new Date().toISOString();
+
+  const success = await writeRemoteData(config, remoteData);
+  if (!success) {
+    throw new Error("Failed to write channel data to WebDAV");
   }
 }
 
 /**
  * Remove a channel from WebDAV (called after channel deletion)
- * Removes by matching baseUrl+apiKey
+ * Removes by matching name (primary) or baseUrl+apiKey (fallback)
  */
 export async function removeChannelFromWebDAV(channel: ChannelData): Promise<void> {
   const config = getWebDAVConfig();
   if (!config) {
-    console.log("[WebDAV Sync] Not configured, skipping remove");
     return;
   }
 
-  try {
-    const remoteData = await readRemoteData(config);
-    if (!remoteData) {
-      console.error("[WebDAV Sync] Failed to read remote data for remove");
-      return;
+  const remoteData = await readRemoteData(config);
+  if (!remoteData) {
+    throw new Error("Failed to read remote data for remove");
+  }
+
+  const originalLength = remoteData.channels.length;
+  const channelKey = `${channel.baseUrl.replace(/\/$/, "")}|${channel.apiKey}`;
+
+  remoteData.channels = remoteData.channels.filter((ch) => {
+    // Match by name (primary)
+    if (ch.name === channel.name) {
+      return false;
     }
+    // Match by baseUrl+apiKey (fallback)
+    const key = `${ch.baseUrl.replace(/\/$/, "")}|${ch.apiKey}`;
+    return key !== channelKey;
+  });
 
-    // Find and remove channel by baseUrl+apiKey
-    const channelKey = `${channel.baseUrl.replace(/\/$/, "")}|${channel.apiKey}`;
-    const originalLength = remoteData.channels.length;
+  if (remoteData.channels.length === originalLength) {
+    return;
+  }
 
-    remoteData.channels = remoteData.channels.filter((ch) => {
-      const key = `${ch.baseUrl.replace(/\/$/, "")}|${ch.apiKey}`;
-      return key !== channelKey;
+  remoteData.exportedAt = new Date().toISOString();
+
+  const success = await writeRemoteData(config, remoteData);
+  if (!success) {
+    throw new Error("Failed to write channel data to WebDAV");
+  }
+}
+
+/**
+ * Update a channel in WebDAV (called after channel update)
+ * Updates by matching baseUrl+apiKey
+ */
+export async function updateChannelInWebDAV(channel: ChannelData): Promise<void> {
+  const config = getWebDAVConfig();
+  if (!config) {
+    return;
+  }
+
+  const remoteData = await readRemoteData(config);
+  if (!remoteData) {
+    throw new Error("Failed to read remote data for update");
+  }
+
+  const channelKey = `${channel.baseUrl.replace(/\/$/, "")}|${channel.apiKey}`;
+
+  // Find and update by baseUrl+apiKey
+  const existingIndex = remoteData.channels.findIndex((ch) => {
+    const key = `${ch.baseUrl.replace(/\/$/, "")}|${ch.apiKey}`;
+    return key === channelKey;
+  });
+
+  if (existingIndex >= 0) {
+    // Update existing entry
+    remoteData.channels[existingIndex] = {
+      name: channel.name,
+      baseUrl: channel.baseUrl.replace(/\/$/, ""),
+      apiKey: channel.apiKey,
+      proxy: channel.proxy || null,
+      enabled: channel.enabled ?? true,
+    };
+  } else {
+    // Channel doesn't exist remotely - append it
+    const existingNames = new Set(remoteData.channels.map((ch) => ch.name));
+    const finalName = generateUniqueName(channel.name, existingNames);
+
+    remoteData.channels.push({
+      name: finalName,
+      baseUrl: channel.baseUrl.replace(/\/$/, ""),
+      apiKey: channel.apiKey,
+      proxy: channel.proxy || null,
+      enabled: channel.enabled ?? true,
     });
+  }
 
-    if (remoteData.channels.length === originalLength) {
-      console.log("[WebDAV Sync] Channel not found in remote, skipping remove");
-      return;
-    }
+  remoteData.exportedAt = new Date().toISOString();
 
-    remoteData.exportedAt = new Date().toISOString();
+  const success = await writeRemoteData(config, remoteData);
+  if (!success) {
+    throw new Error("Failed to write channel data to WebDAV");
+  }
+}
 
-    const success = await writeRemoteData(config, remoteData);
-    if (success) {
-      console.log(`[WebDAV Sync] Channel "${channel.name}" removed from remote`);
-    }
-  } catch (error) {
-    console.error("[WebDAV Sync] Error removing channel:", error);
+/**
+ * Sync all channels to WebDAV (full replace mode)
+ * Used after batch import to ensure WebDAV matches local state
+ */
+export async function syncAllChannelsToWebDAV(channels: ChannelData[]): Promise<void> {
+  const config = getWebDAVConfig();
+  if (!config) {
+    return;
+  }
+
+  // Read existing remote data to preserve schedulerConfig and proxyKeys
+  const remoteData = await readRemoteData(config);
+  const baseData: WebDAVExportData = remoteData || {
+    version: "2.0",
+    exportedAt: new Date().toISOString(),
+    channels: [],
+  };
+
+  // Replace channels with the new list
+  baseData.channels = channels.map((ch) => ({
+    name: ch.name,
+    baseUrl: ch.baseUrl.replace(/\/$/, ""),
+    apiKey: ch.apiKey,
+    proxy: ch.proxy || null,
+    enabled: ch.enabled ?? true,
+  }));
+  baseData.exportedAt = new Date().toISOString();
+
+  const success = await writeRemoteData(config, baseData);
+  if (!success) {
+    throw new Error("Failed to sync all channels to WebDAV");
   }
 }

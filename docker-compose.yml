@@ -28,6 +28,9 @@ services:
       dockerfile: Dockerfile
     container_name: model-check
     restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
@@ -36,7 +39,7 @@ services:
       - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
-      - AUTO_DETECT_ENABLED=${AUTO_DETECT_ENABLED:-true}
+      - AUTO_DETECT_ENABLED=${AUTO_DETECT_ENABLED:-false}
       - DETECT_PROMPT=${DETECT_PROMPT:-1+1=2? yes or no}
       - GLOBAL_PROXY=${GLOBAL_PROXY:-}
       - PROXY_API_KEY=${PROXY_API_KEY:-}

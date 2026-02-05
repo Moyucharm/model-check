@@ -14,7 +14,7 @@ const DEFAULT_CONFIG = {
   maxGlobalConcurrency: parseInt(process.env.MAX_GLOBAL_CONCURRENCY || "30", 10),
   minDelayMs: parseInt(process.env.DETECTION_MIN_DELAY_MS || "3000", 10),
   maxDelayMs: parseInt(process.env.DETECTION_MAX_DELAY_MS || "5000", 10),
-  detectAllChannels: true,
+  detectAllChannels: false,
 };
 
 // GET /api/scheduler/config - Get scheduler configuration with channel list
@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
             id: true,
             modelName: true,
             lastStatus: true,
+            detectedEndpoints: true,
           },
           orderBy: { modelName: "asc" },
         },
@@ -78,7 +79,6 @@ export async function GET(request: NextRequest) {
       nextRun: cronStatus.detection.nextRun,
     });
   } catch (error) {
-    console.error("[API] Get scheduler config error:", error);
     return NextResponse.json(
       { error: "Failed to get scheduler config", code: "FETCH_ERROR" },
       { status: 500 }
@@ -188,7 +188,6 @@ export async function PUT(request: NextRequest) {
       nextRun: cronStatus.detection.nextRun,
     });
   } catch (error) {
-    console.error("[API] Update scheduler config error:", error);
     return NextResponse.json(
       { error: "Failed to update scheduler config", code: "UPDATE_ERROR" },
       { status: 500 }

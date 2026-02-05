@@ -3,7 +3,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Clock, Zap, PlayCircle, Square, Loader2, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Clock, Zap, PlayCircle, Square, Loader2, Trash2, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusIndicator } from "@/components/ui/status-indicator";
 import { Heatmap } from "@/components/ui/heatmap";
@@ -288,7 +288,6 @@ export function ChannelCard({ channel, onRefresh, onDelete, className, onEndpoin
 
         update(toastId, `渠道 ${channel.name} 测试已启动`, "success");
       } catch (err) {
-        console.error("Test channel error:", err);
         update(toastId, `渠道 ${channel.name} 测试失败`, "error");
       }
     }
@@ -339,7 +338,6 @@ export function ChannelCard({ channel, onRefresh, onDelete, className, onEndpoin
 
       update(toastId, `模型 ${modelName} 测试已启动`, "success");
     } catch (err) {
-      console.error("Test model error:", err);
       update(toastId, `模型 ${modelName} 测试失败`, "error");
     }
   };
@@ -347,10 +345,12 @@ export function ChannelCard({ channel, onRefresh, onDelete, className, onEndpoin
   return (
     <div
       className={cn(
-        "rounded-lg border overflow-hidden transition-shadow",
-        isAllUnhealthy
-          ? "border-dashed border-red-400 dark:border-red-500 bg-red-50/30 dark:bg-red-900/10"
-          : "border-border bg-card hover:shadow-md",
+        "rounded-lg border overflow-hidden transition-all duration-300",
+        isChannelTesting
+          ? "border-2 border-blue-400 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/20 shadow-lg shadow-blue-200/50 dark:shadow-blue-900/30 animate-pulse"
+          : isAllUnhealthy
+            ? "border-dashed border-red-400 dark:border-red-500 bg-red-50/30 dark:bg-red-900/10"
+            : "border-border bg-card hover:shadow-md",
         className
       )}
     >
@@ -505,6 +505,7 @@ export function ChannelCard({ channel, onRefresh, onDelete, className, onEndpoin
               <ModelItem
                 key={model.id}
                 model={model}
+                channelName={channel.name}
                 onTest={() => handleTestModel(model.id, model.modelName)}
                 isTesting={testingModelIds.has(model.id)}
                 canTest={isAuthenticated}
@@ -519,6 +520,7 @@ export function ChannelCard({ channel, onRefresh, onDelete, className, onEndpoin
 
 interface ModelItemProps {
   model: Model;
+  channelName: string;
   onTest: () => void;
   isTesting: boolean;
   canTest: boolean;
@@ -597,8 +599,18 @@ function EndpointBadge({
   );
 }
 
-function ModelItem({ model, onTest, isTesting, canTest }: ModelItemProps) {
+function ModelItem({ model, channelName, onTest, isTesting, canTest }: ModelItemProps) {
   const [hoveringStop, setHoveringStop] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Copy channel/model name to clipboard
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const text = `${channelName}/${model.modelName}`;
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // Only show endpoints that have been successfully detected (not pre-filled)
   const endpoints = (model.detectedEndpoints || []) as string[];
@@ -650,6 +662,17 @@ function ModelItem({ model, onTest, isTesting, canTest }: ModelItemProps) {
           <span className="font-mono text-sm truncate font-medium max-w-[200px] sm:max-w-none" title={model.modelName}>
             {model.modelName}
           </span>
+          <button
+            onClick={handleCopy}
+            className="p-0.5 rounded hover:bg-accent/50 transition-colors shrink-0"
+            title={`复制 ${channelName}/${model.modelName}`}
+          >
+            {copied ? (
+              <Check className="h-3 w-3 text-green-500" />
+            ) : (
+              <Copy className="h-3 w-3 text-muted-foreground" />
+            )}
+          </button>
         </div>
 
         {/* Test/Stop button */}

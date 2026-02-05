@@ -1,14 +1,13 @@
 // Prisma Schema for Model-Check
-// Default: PostgreSQL (Supabase, Neon, local Docker)
-// For MySQL: copy schema.mysql.prisma to schema.prisma
+// Database: PostgreSQL (Supabase, Neon, local Docker)
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // Channel - API provider configuration
@@ -32,7 +31,7 @@ model Model {
   id                 String   @id @default(cuid())
   channelId          String   @map("channel_id")
   modelName          String   @map("model_name") @db.VarChar(200)
-  detectedEndpoints  Json?    @map("detected_endpoints") // JSON array of supported endpoint types
+  detectedEndpoints  String[] @default([]) @map("detected_endpoints") // Array of supported endpoint types
   lastStatus         Boolean? @map("last_status")
   lastLatency        Int?     @map("last_latency") // in milliseconds
   lastCheckedAt      DateTime? @map("last_checked_at")
@@ -89,7 +88,7 @@ model SchedulerConfig {
   maxGlobalConcurrency  Int      @default(30) @map("max_global_concurrency")
   minDelayMs            Int      @default(3000) @map("min_delay_ms")
   maxDelayMs            Int      @default(5000) @map("max_delay_ms")
-  detectAllChannels     Boolean  @default(true) @map("detect_all_channels")
+  detectAllChannels     Boolean  @default(false) @map("detect_all_channels")
   selectedChannelIds    Json?    @map("selected_channel_ids")  // string[]
   selectedModelIds      Json?    @map("selected_model_ids")    // Record<channelId, modelId[]>
   updatedAt             DateTime @updatedAt @map("updated_at")

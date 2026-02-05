@@ -88,7 +88,6 @@ export function ProxyKeyManager({ className }: ProxyKeyManagerProps) {
         setKeys(data.keys);
       }
     } catch (error) {
-      console.error("Failed to fetch proxy keys:", error);
       if (mountedRef.current) {
         toast("获取密钥列表失败", "error");
       }
@@ -126,7 +125,6 @@ export function ProxyKeyManager({ className }: ProxyKeyManagerProps) {
         toast("已复制到剪贴板", "success");
       }
     } catch (error) {
-      console.error("Failed to copy key:", error);
       if (mountedRef.current) {
         toast("复制失败", "error");
       }
@@ -156,7 +154,6 @@ export function ProxyKeyManager({ className }: ProxyKeyManagerProps) {
         toast(key.enabled ? "密钥已禁用" : "密钥已启用", "success");
       }
     } catch (error) {
-      console.error("Failed to toggle key:", error);
       if (mountedRef.current) {
         toast("操作失败", "error");
       }
@@ -179,7 +176,6 @@ export function ProxyKeyManager({ className }: ProxyKeyManagerProps) {
         toast("密钥已删除", "success");
       }
     } catch (error) {
-      console.error("Failed to delete key:", error);
       if (mountedRef.current) {
         toast("删除失败", "error");
       }
@@ -203,7 +199,6 @@ export function ProxyKeyManager({ className }: ProxyKeyManagerProps) {
         toast("密钥已重新生成并复制到剪贴板", "success");
       }
     } catch (error) {
-      console.error("Failed to regenerate key:", error);
       if (mountedRef.current) {
         toast("重新生成失败", "error");
       }

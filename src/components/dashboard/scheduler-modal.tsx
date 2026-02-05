@@ -26,6 +26,7 @@ interface SchedulerConfig {
 interface SchedulerModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onSave?: () => void;
 }
 
 // Common cron presets
@@ -39,7 +40,7 @@ const CRON_PRESETS = [
   { label: "自定义", value: "custom" },
 ];
 
-export function SchedulerModal({ isOpen, onClose }: SchedulerModalProps) {
+export function SchedulerModal({ isOpen, onClose, onSave }: SchedulerModalProps) {
   const { token } = useAuth();
   const { toast } = useToast();
 
@@ -115,7 +116,6 @@ export function SchedulerModal({ isOpen, onClose }: SchedulerModalProps) {
         }
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
-        console.error("Failed to load scheduler config:", error);
         if (!controller.signal.aborted) {
           toast("加载配置失败", "error");
         }
@@ -171,9 +171,9 @@ export function SchedulerModal({ isOpen, onClose }: SchedulerModalProps) {
       const data = await response.json();
       setNextRun(data.nextRun);
       toast("配置已保存", "success");
+      onSave?.();
       onClose();
     } catch (error) {
-      console.error("Failed to save scheduler config:", error);
       toast(error instanceof Error ? error.message : "保存失败", "error");
     } finally {
       setSaving(false);
@@ -212,7 +212,7 @@ export function SchedulerModal({ isOpen, onClose }: SchedulerModalProps) {
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="relative bg-card rounded-lg shadow-xl border border-border w-[420px] m-4">
+      <div className="relative bg-card rounded-lg shadow-xl border border-border w-[680px] max-w-[95vw] m-4">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <h2 id="scheduler-modal-title" className="text-lg font-semibold flex items-center gap-2">

@@ -6,21 +6,21 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import {
-  findChannelByModel,
+  findChannelByModelWithPermission,
   buildUpstreamHeaders,
   proxyRequest,
   streamResponse,
   errorResponse,
   normalizeBaseUrl,
-  verifyProxyKey,
+  verifyProxyKeyAsync,
 } from "@/lib/proxy";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
-  // Verify proxy API key
-  const authError = verifyProxyKey(request);
+  // Verify proxy API key (async for multi-key support)
+  const { error: authError, keyResult } = await verifyProxyKeyAsync(request);
   if (authError) return authError;
 
   try {
@@ -40,10 +40,10 @@ export async function POST(
     const modelName = pathStr.substring(0, colonIndex);
     const method = pathStr.substring(colonIndex + 1);
 
-    // Find channel by model name
-    const channel = await findChannelByModel(modelName);
+    // Find channel by model name with permission check
+    const channel = await findChannelByModelWithPermission(modelName, keyResult!);
     if (!channel) {
-      return errorResponse(`Model not found: ${modelName}`, 404);
+      return errorResponse(`Model not found or access denied: ${modelName}`, 404);
     }
 
     // Parse request body
@@ -60,8 +60,6 @@ export async function POST(
 
     const url = `${baseUrl}/v1beta/models/${pathStr}`;
     const headers = buildUpstreamHeaders(channel.apiKey, "gemini");
-
-    console.log(`[Proxy] Gemini request for model "${modelName}" -> channel "${channel.channelName}"`);
 
     // Forward request to upstream (with channel proxy support)
     const response = await proxyRequest(url, "POST", headers, body, channel.proxy);
@@ -83,7 +81,6 @@ export async function POST(
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("[Proxy /v1beta/models] Error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return errorResponse(`Proxy error: ${message}`, 502);
   }
@@ -94,18 +91,18 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
-  // Verify proxy API key
-  const authError = verifyProxyKey(request);
+  // Verify proxy API key (async for multi-key support)
+  const { error: authError, keyResult } = await verifyProxyKeyAsync(request);
   if (authError) return authError;
 
   try {
     const { path } = await params;
     const modelName = path.join("/");
 
-    // Find channel by model name
-    const channel = await findChannelByModel(modelName);
+    // Find channel by model name with permission check
+    const channel = await findChannelByModelWithPermission(modelName, keyResult!);
     if (!channel) {
-      return errorResponse(`Model not found: ${modelName}`, 404);
+      return errorResponse(`Model not found or access denied: ${modelName}`, 404);
     }
 
     // Normalize baseUrl
@@ -131,7 +128,6 @@ export async function GET(
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("[Proxy /v1beta/models GET] Error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return errorResponse(`Proxy error: ${message}`, 502);
   }

@@ -3,13 +3,28 @@
 
 import { randomBytes } from "crypto";
 import prisma from "@/lib/prisma";
-import type { ProxyKey } from "@prisma/client";
+import type { ProxyKey } from "@/generated/prisma";
 
 // Environment variable key
 const ENV_PROXY_API_KEY = process.env.PROXY_API_KEY;
 
 // Auto-generated key (persists for the lifetime of the process)
 let generatedKey: string | null = null;
+
+/**
+ * Safely parse JSON field as string array
+ * Returns null if the value is not a valid string array
+ */
+function parseStringArray(value: unknown): string[] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return value as string[];
+  }
+  // Log warning for invalid data
+  return null;
+}
 
 /**
  * Generate a random API key in sk-xxx format
@@ -35,7 +50,6 @@ export function getProxyApiKey(): string {
 
   if (!generatedKey) {
     generatedKey = generateApiKey();
-    console.log(`[Proxy] Auto-generated API key: ${generatedKey}`);
   }
 
   return generatedKey;
@@ -87,13 +101,11 @@ export async function validateProxyKey(apiKey: string): Promise<ValidateKeyResul
           usageCount: { increment: 1 },
         },
       }).catch((error) => {
-        console.error("[ProxyKey] Failed to update usage statistics:", error);
       });
 
       return { valid: true, keyRecord };
     }
   } catch (error) {
-    console.error("[ProxyKey] Database lookup error:", error);
     // Fall through to check auto-generated key
   }
 
@@ -142,8 +154,8 @@ export async function canAccessModel(
 
   // allowAllModels=false: only explicitly specified channels/models are allowed
   // Permission logic: channel match OR model match grants access
-  const allowedChannelIds = keyRecord.allowedChannelIds as string[] | null;
-  const allowedModelIds = keyRecord.allowedModelIds as string[] | null;
+  const allowedChannelIds = parseStringArray(keyRecord.allowedChannelIds);
+  const allowedModelIds = parseStringArray(keyRecord.allowedModelIds);
 
   // If no explicit permissions configured, deny all
   const hasChannelPerms = allowedChannelIds !== null && allowedChannelIds.length > 0;
@@ -184,7 +196,7 @@ export async function getAccessibleModels(keyRecord: ProxyKey | undefined, isEnv
 
   return {
     allModels: false,
-    channelIds: keyRecord.allowedChannelIds as string[] | undefined,
-    modelIds: keyRecord.allowedModelIds as string[] | undefined,
+    channelIds: parseStringArray(keyRecord.allowedChannelIds) ?? undefined,
+    modelIds: parseStringArray(keyRecord.allowedModelIds) ?? undefined,
   };
 }

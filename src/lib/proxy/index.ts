@@ -5,7 +5,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { proxyFetch } from "@/lib/utils/proxy-fetch";
 import { getProxyApiKey, validateProxyKey, canAccessModel, type ValidateKeyResult } from "@/lib/utils/proxy-key";
-import type { ProxyKey } from "@prisma/client";
+import type { ProxyKey } from "@/generated/prisma";
+
+/**
+ * Safely parse JSON field as string array
+ * Returns null if the value is not a valid string array
+ */
+function parseStringArray(value: unknown): string[] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return value as string[];
+  }
+  return null;
+}
 
 // Proxy request timeout (10 minutes for long-running CLI requests)
 const PROXY_TIMEOUT = 600000;
@@ -231,8 +245,8 @@ export async function getAllModelsWithChannels(keyResult?: ValidateKeyResult): P
 
   // If key has restricted permissions, filter by allowed channels/models
   if (keyResult?.keyRecord && !keyResult.keyRecord.allowAllModels) {
-    const allowedChannelIds = keyResult.keyRecord.allowedChannelIds as string[] | null;
-    const allowedModelIds = keyResult.keyRecord.allowedModelIds as string[] | null;
+    const allowedChannelIds = parseStringArray(keyResult.keyRecord.allowedChannelIds);
+    const allowedModelIds = parseStringArray(keyResult.keyRecord.allowedModelIds);
 
     const hasChannelPerms = allowedChannelIds !== null && allowedChannelIds.length > 0;
     const hasModelPerms = allowedModelIds !== null && allowedModelIds.length > 0;
@@ -338,7 +352,6 @@ export async function proxyRequest(
 
   try {
     if (effectiveProxy) {
-      console.log(`[Proxy] Using proxy: ${effectiveProxy} for ${url}`);
     }
 
     const response = await proxyFetch(
@@ -389,7 +402,6 @@ export function streamResponse(upstream: Response): Response {
           controller.enqueue(value);
         }
       } catch (error) {
-        console.error("[Proxy] Stream error:", error);
         controller.error(error);
       }
     },

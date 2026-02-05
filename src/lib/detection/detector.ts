@@ -1,8 +1,8 @@
 // Core detector - executes HTTP requests to test model availability
 
-import { CheckStatus, EndpointType } from "@prisma/client";
+import { CheckStatus, EndpointType } from "@/generated/prisma";
 import { buildEndpointDetection } from "./strategies";
-import type { DetectionJobData, DetectionResult } from "./types";
+import type { DetectionJobData, DetectionResult, FetchModelsResult } from "./types";
 import { proxyFetch } from "@/lib/utils/proxy-fetch";
 
 // Detection timeout in milliseconds
@@ -291,7 +291,6 @@ export async function executeDetection(job: DetectionJobData): Promise<Detection
     };
 
     if (proxy) {
-      console.log(`[Detector] Using proxy: ${proxy} for ${job.modelName}`);
     }
 
     // Use proxyFetch for proxy support
@@ -377,7 +376,7 @@ export async function fetchModels(
   baseUrl: string,
   apiKey: string,
   proxy?: string | null
-): Promise<string[]> {
+): Promise<FetchModelsResult> {
   // Normalize baseUrl - remove trailing slash and /v1 suffix if present
   let normalizedBaseUrl = baseUrl.replace(/\/$/, "");
   if (normalizedBaseUrl.endsWith("/v1")) {
@@ -388,10 +387,7 @@ export async function fetchModels(
 
   const effectiveProxy = proxy || GLOBAL_PROXY;
   if (effectiveProxy) {
-    console.log(`[Detector] Using proxy: ${effectiveProxy} for model list`);
   }
-
-  console.log(`[Detector] Fetching models from: ${url}`);
 
   try {
     const controller = new AbortController();
@@ -410,8 +406,8 @@ export async function fetchModels(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      console.error(`[Detector] Failed to fetch models: HTTP ${response.status}`, errorText.slice(0, 200));
-      return [];
+      const errorMsg = `HTTP ${response.status}: ${errorText.slice(0, 200)}`;
+      return { models: [], error: errorMsg };
     }
 
     const data = await response.json();
@@ -424,14 +420,28 @@ export async function fetchModels(
         )
         .map((m: { id: string }) => m.id);
 
-      console.log(`[Detector] Found ${models.length} models`);
-      return models;
+      return { models };
     }
 
-    console.log("[Detector] No models array in response");
-    return [];
+    return { models: [] };
   } catch (error) {
-    console.error("[Detector] Error fetching models:", error);
-    return [];
+    let errorMsg: string;
+    if (error instanceof Error) {
+      if (error.name === "AbortError") {
+        errorMsg = `请求超时: ${url}`;
+      } else {
+        const cause = error.cause as { code?: string } | undefined;
+        if (cause?.code === "ECONNREFUSED") {
+          errorMsg = `无法连接到服务: ${url}`;
+        } else if (cause?.code === "ENOTFOUND") {
+          errorMsg = `域名解析失败: ${url}`;
+        } else {
+          errorMsg = error.message;
+        }
+      }
+    } else {
+      errorMsg = "未知错误";
+    }
+    return { models: [], error: errorMsg };
   }
 }

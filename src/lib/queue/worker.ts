@@ -5,7 +5,7 @@ import redis from "@/lib/redis";
 import prisma from "@/lib/prisma";
 import { executeDetection, sleep, randomDelay } from "@/lib/detection/detector";
 import type { DetectionJobData, DetectionResult } from "@/lib/detection/types";
-import { DETECTION_QUEUE_NAME } from "./queue";
+import { DETECTION_QUEUE_NAME, PROGRESS_CHANNEL } from "./constants";
 
 // Worker configuration (from environment variables)
 const WORKER_CONCURRENCY = 50; // BullMQ worker pool size (should be >= MAX_GLOBAL_CONCURRENCY)
@@ -15,9 +15,6 @@ const MIN_DELAY_MS = parseInt(process.env.DETECTION_MIN_DELAY_MS || "3000", 10);
 const MAX_DELAY_MS = parseInt(process.env.DETECTION_MAX_DELAY_MS || "5000", 10);
 const SEMAPHORE_POLL_MS = 500; // Poll interval when waiting for slot
 const SEMAPHORE_TTL = 120; // TTL in seconds for semaphore keys (auto-cleanup)
-
-// Redis pub/sub channel for SSE progress updates
-export const PROGRESS_CHANNEL = "detection:progress";
 
 // Redis keys
 const GLOBAL_SEMAPHORE_KEY = "detection:semaphore:global";
@@ -66,15 +63,25 @@ async function acquireSlots(channelId: string): Promise<void> {
 async function releaseSlots(channelId: string): Promise<void> {
   const channelKey = channelSemaphoreKey(channelId);
 
-  // Release both slots
-  const [channelVal, globalVal] = await Promise.all([
-    redis.decr(channelKey),
-    redis.decr(GLOBAL_SEMAPHORE_KEY),
-  ]);
+  // Release both slots with minimum value protection
+  // Use pipeline for atomic execution
+  const pipeline = redis.pipeline();
+  pipeline.decr(channelKey);
+  pipeline.decr(GLOBAL_SEMAPHORE_KEY);
+  const results = await pipeline.exec();
 
-  // Clean up if counters reach 0
-  if (channelVal <= 0) await redis.del(channelKey);
-  if (globalVal <= 0) await redis.del(GLOBAL_SEMAPHORE_KEY);
+  // Check results and ensure counters don't go negative
+  const channelVal = (results?.[0]?.[1] as number) ?? 0;
+  const globalVal = (results?.[1]?.[1] as number) ?? 0;
+
+  // Clean up or reset if counters are at or below 0
+  // This prevents negative values from accumulating if queue was forcibly cleared
+  if (channelVal <= 0) {
+    await redis.del(channelKey);
+  }
+  if (globalVal <= 0) {
+    await redis.del(GLOBAL_SEMAPHORE_KEY);
+  }
 }
 
 /**
@@ -85,55 +92,66 @@ async function processDetectionJob(
 ): Promise<DetectionResult> {
   const { data } = job;
 
+  // Check if detection has been stopped before processing
+  const { isDetectionStopped } = await import("./queue");
+  if (await isDetectionStopped()) {
+    return {
+      status: "FAIL",
+      latency: 0,
+      endpointType: data.endpointType,
+      errorMsg: "Detection stopped by user",
+    };
+  }
+
   // Acquire concurrency slots (both global and per-channel)
   await acquireSlots(data.channelId);
 
   try {
-    console.log(`[Worker] Processing job ${job.id}: ${data.modelName} (${data.endpointType})`);
+    // Check again after acquiring slot (in case stop was triggered during wait)
+    if (await isDetectionStopped()) {
+      return {
+        status: "FAIL",
+        latency: 0,
+        endpointType: data.endpointType,
+        errorMsg: "Detection stopped by user",
+      };
+    }
 
     // Anti-blocking delay (3-5 seconds random)
     const delay = randomDelay(MIN_DELAY_MS, MAX_DELAY_MS);
-    console.log(`[Worker] Waiting ${delay}ms before detection...`);
     await sleep(delay);
 
     // Execute the actual detection
     const result = await executeDetection(data);
 
-    console.log(
-      `[Worker] Detection complete for ${data.modelName} (${data.endpointType}): ${result.status} (${result.latency}ms)`
-    );
-
-    // Use transaction to atomically update model status and create log
+    // Use atomic operations to avoid race conditions when updating detectedEndpoints
+    // Multiple detection jobs for the same model can run in parallel
     await prisma.$transaction(async (tx) => {
-      // Get current model within transaction for atomic read-modify-write
-      const currentModel = await tx.model.findUnique({
-        where: { id: data.modelId },
-        select: { detectedEndpoints: true },
-      });
-
-      // Update detectedEndpoints based on result
-      let detectedEndpoints = (currentModel?.detectedEndpoints as string[]) || [];
-
       if (result.status === "SUCCESS") {
-        // Add endpoint to detectedEndpoints if not already present
-        if (!detectedEndpoints.includes(data.endpointType)) {
-          detectedEndpoints = [...detectedEndpoints, data.endpointType];
-        }
+        // Atomically add endpoint to array if not already present (PostgreSQL array operation)
+        await tx.$executeRaw`
+          UPDATE "models"
+          SET "detected_endpoints" =
+            CASE
+              WHEN ${data.endpointType} = ANY("detected_endpoints") THEN "detected_endpoints"
+              ELSE COALESCE("detected_endpoints", ARRAY[]::text[]) || ARRAY[${data.endpointType}]
+            END,
+            "last_status" = true,
+            "last_latency" = ${result.latency},
+            "last_checked_at" = ${new Date()}
+          WHERE id = ${data.modelId}
+        `;
       } else {
-        // Remove endpoint from detectedEndpoints on failure
-        detectedEndpoints = detectedEndpoints.filter((ep) => ep !== data.endpointType);
+        // Atomically remove endpoint from array (PostgreSQL array_remove)
+        await tx.$executeRaw`
+          UPDATE "models"
+          SET "detected_endpoints" = array_remove(COALESCE("detected_endpoints", ARRAY[]::text[]), ${data.endpointType}),
+            "last_status" = false,
+            "last_latency" = ${result.latency},
+            "last_checked_at" = ${new Date()}
+          WHERE id = ${data.modelId}
+        `;
       }
-
-      // Update model status in database
-      await tx.model.update({
-        where: { id: data.modelId },
-        data: {
-          lastStatus: result.status === "SUCCESS",
-          lastLatency: result.latency,
-          lastCheckedAt: new Date(),
-          detectedEndpoints,
-        },
-      });
 
       // Create check log entry
       await tx.checkLog.create({
@@ -149,7 +167,21 @@ async function processDetectionJob(
       });
     });
 
-    // Publish progress update for SSE
+    // Check if this model has any remaining jobs (to determine if model detection is complete)
+    const queue = (await import("./queue")).getDetectionQueue();
+    const [waitingJobs, activeJobs, delayedJobs] = await Promise.all([
+      queue.getJobs(["waiting"], 0, 1000),
+      queue.getJobs(["active"], 0, 100),
+      queue.getJobs(["delayed"], 0, 1000),
+    ]);
+
+    // Count remaining jobs for this model (excluding the current job which is about to complete)
+    const remainingJobs = [...waitingJobs, ...activeJobs, ...delayedJobs].filter(
+      (j) => j.data?.modelId === data.modelId && j.id !== job.id
+    );
+    const isModelComplete = remainingJobs.length === 0;
+
+    // Publish progress update for SSE (with error handling to not affect detection result)
     const progressData = {
       channelId: data.channelId,
       modelId: data.modelId,
@@ -158,9 +190,14 @@ async function processDetectionJob(
       status: result.status,
       latency: result.latency,
       timestamp: Date.now(),
+      isModelComplete, // true when all endpoints for this model are done
     };
 
-    await redis.publish(PROGRESS_CHANNEL, JSON.stringify(progressData));
+    try {
+      await redis.publish(PROGRESS_CHANNEL, JSON.stringify(progressData));
+    } catch (publishError) {
+      // Redis publish failure should not affect the detection result
+    }
 
     return result;
   } finally {
@@ -174,7 +211,6 @@ async function processDetectionJob(
  */
 export function startWorker(): Worker<DetectionJobData, DetectionResult> {
   if (worker) {
-    console.log("[Worker] Worker already running");
     return worker;
   }
 
@@ -189,22 +225,16 @@ export function startWorker(): Worker<DetectionJobData, DetectionResult> {
 
   // Event handlers
   worker.on("completed", (job, result) => {
-    console.log(`[Worker] Job ${job.id} completed: ${result.status}`);
   });
 
   worker.on("failed", (job, error) => {
-    console.error(`[Worker] Job ${job?.id} failed:`, error.message);
   });
 
   worker.on("error", (error) => {
-    console.error("[Worker] Worker error:", error);
   });
 
   worker.on("stalled", (jobId) => {
-    console.warn(`[Worker] Job ${jobId} stalled`);
   });
-
-  console.log(`[Worker] Started - global max: ${MAX_GLOBAL_CONCURRENCY}, per-channel: ${CHANNEL_CONCURRENCY}`);
 
   return worker;
 }
@@ -216,7 +246,6 @@ export async function stopWorker(): Promise<void> {
   if (worker) {
     await worker.close();
     worker = null;
-    console.log("[Worker] Stopped");
   }
 }
 

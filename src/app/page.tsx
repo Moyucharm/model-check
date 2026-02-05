@@ -34,6 +34,12 @@ export default function Home() {
   const refreshDebounceRef = useRef<NodeJS.Timeout | null>(null);
   // Track SSE connection state for polling logic
   const sseConnectedRef = useRef(false);
+  // Ignore progress fetch after stop to prevent race condition
+  const ignoreProgressFetchRef = useRef(false);
+  // Ignore SSE events after stop
+  const ignoreSSERef = useRef(false);
+  // Timer for clearing ignore flags after stop
+  const clearIgnoreFlagsTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Add models to testing set
   const addTestingModels = useCallback((modelIds: string[]) => {
@@ -69,8 +75,12 @@ export default function Home() {
   // SSE for real-time updates - must be before useEffects that depend on isConnected
   const { isConnected } = useSSE({
     onProgress: (event) => {
-      // Remove model from testing set when test completes
-      if (event.type === "progress" && event.modelId) {
+      // Ignore SSE events after stop
+      if (ignoreSSERef.current) {
+        return;
+      }
+      // Remove model from testing set only when ALL endpoints for this model are done
+      if (event.type === "progress" && event.modelId && event.isModelComplete) {
         removeTestingModel(event.modelId);
       }
       // Trigger dashboard refresh with debounce to avoid rapid re-renders
@@ -85,6 +95,10 @@ export default function Home() {
 
   // Fetch detection progress (used for initial load and polling fallback)
   const fetchProgress = useCallback(async () => {
+    // Skip fetch if we just stopped detection (prevent race condition)
+    if (ignoreProgressFetchRef.current) {
+      return;
+    }
     try {
       const response = await fetch("/api/detect");
       if (response.ok) {
@@ -110,9 +124,17 @@ export default function Home() {
         }
       }
     } catch (error) {
-      console.error("[Page] Failed to fetch detection progress:", error);
     }
   }, []);
+
+  // Auto-update isDetectionRunning when testingModelIds becomes empty
+  // This ensures the button state updates when all models finish testing via SSE
+  useEffect(() => {
+    if (isDetectionRunning && testingModelIds.size === 0) {
+      // Double-check with server to confirm detection is complete
+      fetchProgress();
+    }
+  }, [testingModelIds.size, isDetectionRunning, fetchProgress]);
 
   // Remove multiple models from testing set (for stop action)
   const removeTestingModels = useCallback((modelIds: string[]) => {
@@ -121,9 +143,9 @@ export default function Home() {
       modelIds.forEach((id) => next.delete(id));
       return next;
     });
-    // Trigger refresh after stopping
-    fetchProgress();
-  }, [fetchProgress]);
+    // Note: Removed fetchProgress() call here to prevent race condition
+    // The SSE events will handle the final state update
+  }, []);
 
   // Fetch initial detection progress on page load
   useEffect(() => {
@@ -162,6 +184,50 @@ export default function Home() {
     };
   }, []);
 
+  // Handle detection start from header - immediately update UI
+  const handleDetectionStart = useCallback(async () => {
+    // Cancel any pending clear-ignore-flags timer from previous stop
+    if (clearIgnoreFlagsTimerRef.current) {
+      clearTimeout(clearIgnoreFlagsTimerRef.current);
+      clearIgnoreFlagsTimerRef.current = null;
+    }
+    // Clear ignore flags from previous stop
+    ignoreProgressFetchRef.current = false;
+    ignoreSSERef.current = false;
+
+    setIsDetectionRunning(true);
+    // Clear testing model IDs to reset UI to "untested" state
+    setTestingModelIds(new Set());
+    // Trigger dashboard refresh to show reset state
+    setRefreshKey((k) => k + 1);
+    // Fetch progress to get all model IDs that will be tested
+    try {
+      // Delay to let the backend reset model status and queue jobs
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await fetchProgress();
+    } catch (error) {
+    }
+  }, [fetchProgress]);
+
+  // Handle detection stop from header
+  const handleDetectionStop = useCallback(() => {
+    setIsDetectionRunning(false);
+    setTestingModelIds(new Set());
+    // Set ignore flags to prevent race condition with pending responses
+    ignoreProgressFetchRef.current = true;
+    ignoreSSERef.current = true;
+    // Cancel any pending clear-ignore-flags timer
+    if (clearIgnoreFlagsTimerRef.current) {
+      clearTimeout(clearIgnoreFlagsTimerRef.current);
+    }
+    // Clear ignore flags after 3 seconds to resume normal operation
+    clearIgnoreFlagsTimerRef.current = setTimeout(() => {
+      ignoreProgressFetchRef.current = false;
+      ignoreSSERef.current = false;
+      clearIgnoreFlagsTimerRef.current = null;
+    }, 3000);
+  }, []);
+
   return (
     <div className="min-h-screen flex flex-col">
       <Header
@@ -174,6 +240,8 @@ export default function Home() {
         onEndpointFilterChange={setEndpointFilter}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
+        onDetectionStart={handleDetectionStart}
+        onDetectionStop={handleDetectionStop}
       />
 
       <main className="flex-1 container mx-auto px-4 py-6">

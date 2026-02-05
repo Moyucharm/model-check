@@ -68,6 +68,8 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
 
   // Sync state
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  // Per-channel sync status message (shown on the channel card)
+  const [syncStatus, setSyncStatus] = useState<Record<string, { message: string; type: "success" | "error" }>>({});
 
   // Delete confirmation
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -83,7 +85,11 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const [importText, setImportText] = useState("");
 
-  // WebDAV sync state
+  // Pagination state
+  const [channelPage, setChannelPage] = useState(1);
+  const CHANNELS_PER_PAGE = 12;
+
+  // 云通知 state
   const [showWebDAVModal, setShowWebDAVModal] = useState(false);
   const [webdavUploading, setWebdavUploading] = useState(false);
   const [webdavDownloading, setWebdavDownloading] = useState(false);
@@ -109,7 +115,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
     return () => document.removeEventListener("keydown", handleEsc);
   }, [showModal, showImportModal, showWebDAVModal]);
 
-  // Load WebDAV config from localStorage and API
+  // Load cloud sync config from localStorage and API
   useEffect(() => {
     const loadWebdavConfig = async () => {
       // First load from localStorage
@@ -121,7 +127,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
       };
 
       if (typeof window !== "undefined") {
-        const saved = localStorage.getItem("webdav-config");
+        const saved = sessionStorage.getItem("webdav-config");
         if (saved) {
           try {
             const parsed = JSON.parse(saved);
@@ -171,7 +177,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
   };
 
   // Fetch channels
-  const fetchChannels = useCallback(async () => {
+  const fetchChannels = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
@@ -180,20 +186,30 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
+        signal,
       });
       if (!response.ok) throw new Error("获取渠道列表失败");
       const data = await response.json();
-      setChannels(data.channels || []);
+      if (!signal?.aborted) {
+        setChannels(data.channels || []);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "未知错误");
+      if (err instanceof Error && err.name === "AbortError") return;
+      if (!signal?.aborted) {
+        setError(err instanceof Error ? err.message : "未知错误");
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [token]);
 
   useEffect(() => {
     if (isExpanded && token) {
-      fetchChannels();
+      const controller = new AbortController();
+      fetchChannels(controller.signal);
+      return () => controller.abort();
     }
   }, [isExpanded, token, fetchChannels]);
 
@@ -266,6 +282,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
 
         // Auto sync models after creating channel
         const createData = await response.json();
+
         if (createData.channel?.id) {
           try {
             await fetch(`/api/channel/${createData.channel.id}/sync`, {
@@ -274,7 +291,6 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
             });
           } catch {
             // Ignore sync errors, channel is created
-            console.log("[ChannelManager] Auto sync failed, can sync manually");
           }
         }
       }
@@ -297,6 +313,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
         headers,
       });
       if (!response.ok) throw new Error("删除渠道失败");
+
       setDeleteConfirm(null);
       fetchChannels();
       onUpdate();
@@ -308,6 +325,12 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
   // Sync models
   const handleSync = async (id: string) => {
     setSyncingId(id);
+    // Clear any previous status for this channel
+    setSyncStatus((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     try {
       const response = await fetch(`/api/channel/${id}/sync`, {
         method: "POST",
@@ -315,10 +338,35 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "同步失败");
+
+      // Show success message on the channel card
+      const message = `同步成功: +${data.added} -${data.removed} = ${data.total}`;
+      setSyncStatus((prev) => ({ ...prev, [id]: { message, type: "success" } }));
+
+      // Auto clear after 5 seconds
+      setTimeout(() => {
+        setSyncStatus((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }, 5000);
+
       fetchChannels();
       onUpdate();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "同步失败");
+      // Show error message on the channel card instead of global error
+      const message = err instanceof Error ? err.message : "同步失败";
+      setSyncStatus((prev) => ({ ...prev, [id]: { message, type: "error" } }));
+
+      // Auto clear after 8 seconds for errors
+      setTimeout(() => {
+        setSyncStatus((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }, 8000);
     } finally {
       setSyncingId(null);
     }
@@ -406,7 +454,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
     reader.readAsText(file);
   };
 
-  // WebDAV sync
+  // 云通知 sync
   const handleWebDAVSync = async (action: "upload" | "download") => {
     if (action === "upload") {
       setWebdavUploading(true);
@@ -415,8 +463,13 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
     }
     setError(null);
 
-    // Save config to localStorage before request (so password is preserved even on failure)
-    localStorage.setItem("webdav-config", JSON.stringify(webdavConfig));
+    // Save config to sessionStorage before request (password excluded for security)
+    // Note: Password is not persisted - user must re-enter or rely on env variable
+    sessionStorage.setItem("webdav-config", JSON.stringify({
+      url: webdavConfig.url,
+      username: webdavConfig.username,
+      filename: webdavConfig.filename,
+    }));
 
     try {
       const response = await fetch("/api/channel/webdav", {
@@ -487,6 +540,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
             }}
             className="inline-flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
             title="添加渠道"
+            aria-label="添加渠道"
           >
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">添加</span>
@@ -500,6 +554,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
             }}
             className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-input bg-background hover:bg-accent transition-colors"
             title="导入渠道"
+            aria-label="导入渠道"
           >
             <Upload className="h-4 w-4" />
           </button>
@@ -513,18 +568,20 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
             disabled={exporting}
             className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-input bg-background hover:bg-accent transition-colors disabled:opacity-50"
             title="导出渠道"
+            aria-label="导出渠道"
           >
             {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           </button>
 
-          {/* WebDAV sync button */}
+          {/* 云通知按钮 */}
           <button
             onClick={(e) => {
               e.stopPropagation();
               setShowWebDAVModal(true);
             }}
             className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-input bg-background hover:bg-accent transition-colors"
-            title="WebDAV 同步"
+            title="云通知"
+            aria-label="云通知"
           >
             <Cloud className="h-4 w-4" />
           </button>
@@ -551,8 +608,11 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
               暂无渠道，点击上方按钮添加
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {channels.map((channel) => (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {channels
+                  .slice((channelPage - 1) * CHANNELS_PER_PAGE, channelPage * CHANNELS_PER_PAGE)
+                  .map((channel) => (
                 <div
                   key={channel.id}
                   className="flex flex-col p-3 rounded-md border border-border bg-background"
@@ -571,12 +631,26 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
                     {channel._count?.models || 0} 个模型 | Key:{" "}
                     {channel.apiKey}
                   </div>
+                  {/* Sync status message */}
+                  {syncStatus[channel.id] && (
+                    <div
+                      className={cn(
+                        "text-xs mt-2 px-2 py-1 rounded",
+                        syncStatus[channel.id].type === "success"
+                          ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                          : "bg-destructive/10 text-destructive"
+                      )}
+                    >
+                      {syncStatus[channel.id].message}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1 mt-3 pt-2 border-t border-border">
                     <button
                       onClick={() => handleCopyApiKey(channel.id)}
                       disabled={copyingId === channel.id}
                       className="p-2 rounded-md hover:bg-accent transition-colors disabled:opacity-50"
                       title="复制 API Key"
+                      aria-label="复制 API Key"
                     >
                       {copyingId === channel.id ? (
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -591,6 +665,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
                       disabled={syncingId === channel.id}
                       className="p-2 rounded-md hover:bg-accent transition-colors disabled:opacity-50"
                       title="同步模型列表"
+                      aria-label="同步模型列表"
                     >
                       <RefreshCw
                         className={cn(
@@ -603,6 +678,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
                       onClick={() => handleEdit(channel)}
                       className="p-2 rounded-md hover:bg-accent transition-colors"
                       title="编辑"
+                      aria-label="编辑渠道"
                     >
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </button>
@@ -626,6 +702,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
                         onClick={() => setDeleteConfirm(channel.id)}
                         className="p-2 rounded-md hover:bg-accent transition-colors"
                         title="删除"
+                        aria-label="删除渠道"
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </button>
@@ -634,6 +711,40 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
                 </div>
               ))}
             </div>
+
+            {/* Pagination */}
+            {channels.length > CHANNELS_PER_PAGE && (
+              <div className="flex items-center justify-center gap-2 pt-2">
+                <button
+                  onClick={() => setChannelPage((p) => Math.max(1, p - 1))}
+                  disabled={channelPage <= 1}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                    channelPage <= 1
+                      ? "text-muted-foreground cursor-not-allowed"
+                      : "text-foreground hover:bg-accent"
+                  )}
+                >
+                  <ChevronUp className="h-4 w-4 rotate-[-90deg]" />
+                </button>
+                <span className="text-sm text-muted-foreground">
+                  {channelPage} / {Math.ceil(channels.length / CHANNELS_PER_PAGE)}
+                </span>
+                <button
+                  onClick={() => setChannelPage((p) => Math.min(Math.ceil(channels.length / CHANNELS_PER_PAGE), p + 1))}
+                  disabled={channelPage >= Math.ceil(channels.length / CHANNELS_PER_PAGE)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                    channelPage >= Math.ceil(channels.length / CHANNELS_PER_PAGE)
+                      ? "text-muted-foreground cursor-not-allowed"
+                      : "text-foreground hover:bg-accent"
+                  )}
+                >
+                  <ChevronDown className="h-4 w-4 rotate-[-90deg]" />
+                </button>
+              </div>
+            )}
+          </>
           )}
         </div>
       )}
@@ -864,7 +975,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
         </div>
       )}
 
-      {/* WebDAV Modal */}
+      {/* 云通知 Modal */}
       {showWebDAVModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
@@ -879,7 +990,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
           />
           <div className="relative w-full max-w-lg mx-4 bg-card rounded-lg shadow-lg border border-border max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-4 border-b border-border">
-              <h2 id="webdav-modal-title" className="text-lg font-semibold">WebDAV 同步</h2>
+              <h2 id="webdav-modal-title" className="text-lg font-semibold">云通知</h2>
               <button
                 onClick={() => setShowWebDAVModal(false)}
                 className="p-1 rounded-md hover:bg-accent transition-colors"
@@ -893,7 +1004,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
               {/* Env config hint */}
               {webdavEnvConfigured && (
                 <div className="p-3 rounded-md bg-green-500/10 border border-green-500/20 text-sm text-green-600 dark:text-green-400">
-                  已从环境变量加载 WebDAV 配置。密码留空将使用环境变量中的密码。
+                  已从环境变量加载云通知配置。密码留空将使用环境变量中的密码。
                 </div>
               )}
 
@@ -902,10 +1013,10 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
                 坚果云用户：需先在网页端创建同步文件夹，URL 填写到该文件夹路径。密码需使用应用密码（非登录密码）。
               </div>
 
-              {/* WebDAV URL */}
+              {/* 云服务 URL */}
               <div>
                 <label className="block text-sm font-medium mb-1">
-                  WebDAV URL <span className="text-destructive">*</span>
+                  服务地址 <span className="text-destructive">*</span>
                 </label>
                 <input
                   type="url"

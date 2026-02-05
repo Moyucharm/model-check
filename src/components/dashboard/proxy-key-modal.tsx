@@ -69,7 +69,6 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
         }
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
-        console.error("Failed to load channels:", error);
       } finally {
         if (!controller.signal.aborted) {
           setLoadingChannels(false);
@@ -87,9 +86,33 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
       setName(editingKey.name);
       setEnabled(editingKey.enabled);
       setAllowAllModels(editingKey.allowAllModels);
-      setSelectedChannelIds(editingKey.allowedChannelIds || []);
-      setSelectedModelIds((editingKey.allowedModelIds as unknown as Record<string, string[]>) || {});
       setGeneratedKey(""); // Don't show key in edit mode
+
+      // 正确解析 allowedModelIds（后端存储为扁平数组 string[]）
+      const modelIds = editingKey.allowedModelIds;
+
+      if (Array.isArray(modelIds) && modelIds.length > 0 && !loadingChannels && channels.length > 0) {
+        // 后端返回的是扁平数组，需要按渠道重新分组
+        const groupedByChannel: Record<string, string[]> = {};
+
+        // 遍历所有渠道，找出哪些模型在 allowedModelIds 中
+        for (const channel of channels) {
+          const selectedInChannel = channel.models
+            .filter(m => modelIds.includes(m.id))
+            .map(m => m.id);
+          if (selectedInChannel.length > 0) {
+            groupedByChannel[channel.id] = selectedInChannel;
+          }
+        }
+
+        setSelectedModelIds(groupedByChannel);
+        setSelectedChannelIds(Object.keys(groupedByChannel));
+      } else if (!Array.isArray(modelIds) || modelIds.length === 0) {
+        // 没有模型限制或空数组
+        setSelectedModelIds({});
+        setSelectedChannelIds(editingKey.allowedChannelIds || []);
+      }
+      // 如果 channels 还在加载，等待下次 effect 触发
     } else {
       setName("");
       setEnabled(true);
@@ -99,7 +122,7 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
       // Auto-generate a key
       handleGenerateKey();
     }
-  }, [editingKey, isOpen]);
+  }, [editingKey, isOpen, channels, loadingChannels]);
 
   // Generate a new key value
   const handleGenerateKey = () => {
@@ -129,6 +152,18 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
       return;
     }
 
+    // 计算有效的权限数据
+    // 只有当渠道下所有模型都被选中时，才传递 channelId（避免 OR 逻辑导致返回整个渠道）
+    const effectiveChannelIds = selectedChannelIds.filter(channelId => {
+      const channel = channels.find(c => c.id === channelId);
+      if (!channel) return false;
+      const selectedModels = selectedModelIds[channelId] || [];
+      return selectedModels.length === channel.models.length;
+    });
+
+    // 收集所有选中的 modelIds (扁平化)
+    const effectiveModelIds = Object.values(selectedModelIds).flat();
+
     setSaving(true);
     try {
       if (editingKey) {
@@ -143,8 +178,8 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
             name: name.trim(),
             enabled,
             allowAllModels,
-            allowedChannelIds: allowAllModels ? null : selectedChannelIds,
-            allowedModelIds: allowAllModels ? null : selectedModelIds,
+            allowedChannelIds: allowAllModels ? null : (effectiveChannelIds.length > 0 ? effectiveChannelIds : null),
+            allowedModelIds: allowAllModels ? null : (effectiveModelIds.length > 0 ? effectiveModelIds : null),
           }),
         });
 
@@ -167,8 +202,8 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
             key: generatedKey || undefined,
             enabled,
             allowAllModels,
-            allowedChannelIds: allowAllModels ? null : selectedChannelIds,
-            allowedModelIds: allowAllModels ? null : selectedModelIds,
+            allowedChannelIds: allowAllModels ? null : (effectiveChannelIds.length > 0 ? effectiveChannelIds : null),
+            allowedModelIds: allowAllModels ? null : (effectiveModelIds.length > 0 ? effectiveModelIds : null),
           }),
         });
 
@@ -189,7 +224,6 @@ export function ProxyKeyModal({ isOpen, onClose, editingKey, onSuccess }: ProxyK
 
       onSuccess();
     } catch (error) {
-      console.error("Failed to save proxy key:", error);
       toast(error instanceof Error ? error.message : "操作失败", "error");
     } finally {
       setSaving(false);

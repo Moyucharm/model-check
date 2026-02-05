@@ -25,7 +25,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(data);
   } catch (error) {
-    console.error("[Proxy /v1/models] Error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return errorResponse(`Failed to fetch models: ${message}`, 500);
   }

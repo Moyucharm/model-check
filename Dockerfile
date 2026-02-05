@@ -2,7 +2,8 @@
 # Stage 1: Dependencies
 # ========================================
 # https://github.com/chxcodepro/model-check
-FROM docker.m.daocloud.io/library/node:20-alpine AS deps
+# Prisma 7 requires Node.js 22.12.0+ or 20.19.0+
+FROM docker.m.daocloud.io/library/node:22-alpine AS deps
 WORKDIR /app
 
 # Install dependencies for native modules
@@ -11,22 +12,26 @@ RUN apk add --no-cache libc6-compat
 # Copy package files
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma/
+COPY prisma.config.ts ./
 
-# Install dependencies
-RUN npm ci --legacy-peer-deps
+# Install dependencies (skip postinstall, will run in builder stage)
+RUN npm ci --legacy-peer-deps --ignore-scripts
 
 # ========================================
 # Stage 2: Builder
 # ========================================
-FROM docker.m.daocloud.io/library/node:20-alpine AS builder
+FROM docker.m.daocloud.io/library/node:22-alpine AS builder
 WORKDIR /app
 
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
+# Set dummy DATABASE_URL for Prisma generate (no actual connection needed)
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
+
+# Generate Prisma client with index.ts
+RUN npm run db:generate
 
 # Build application
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -37,7 +42,7 @@ RUN npm run build
 # ========================================
 # Stage 3: Runner (Production)
 # ========================================
-FROM docker.m.daocloud.io/library/node:20-alpine AS runner
+FROM docker.m.daocloud.io/library/node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -52,12 +57,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./package.json
 
-# Copy standalone build
+# Copy standalone build (includes bundled dependencies)
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy Prisma client runtime
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+# Copy Prisma adapter runtime (required for Prisma v7 adapter pattern)
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 USER nextjs

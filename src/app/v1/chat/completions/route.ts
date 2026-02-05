@@ -5,18 +5,18 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import {
-  findChannelByModel,
+  findChannelByModelWithPermission,
   buildUpstreamHeaders,
   proxyRequest,
   streamResponse,
   errorResponse,
   normalizeBaseUrl,
-  verifyProxyKey,
+  verifyProxyKeyAsync,
 } from "@/lib/proxy";
 
 export async function POST(request: NextRequest) {
-  // Verify proxy API key
-  const authError = verifyProxyKey(request);
+  // Verify proxy API key (async for multi-key support)
+  const { error: authError, keyResult } = await verifyProxyKeyAsync(request);
   if (authError) return authError;
 
   try {
@@ -28,10 +28,10 @@ export async function POST(request: NextRequest) {
       return errorResponse("Missing 'model' field in request body", 400);
     }
 
-    // Find channel by model name (supports "channelName/modelName" format)
-    const channel = await findChannelByModel(modelName);
+    // Find channel by model name with permission check (supports "channelName/modelName" format)
+    const channel = await findChannelByModelWithPermission(modelName, keyResult!);
     if (!channel) {
-      return errorResponse(`Model not found: ${modelName}`, 404);
+      return errorResponse(`Model not found or access denied: ${modelName}`, 404);
     }
 
     // Use actual model name (without channel prefix) for upstream request
@@ -41,8 +41,6 @@ export async function POST(request: NextRequest) {
     const baseUrl = normalizeBaseUrl(channel.baseUrl);
     const url = `${baseUrl}/v1/chat/completions`;
     const headers = buildUpstreamHeaders(channel.apiKey, "openai");
-
-    console.log(`[Proxy] Chat request for model "${modelName}" -> channel "${channel.channelName}" (upstream model: "${channel.actualModelName}", stream: ${isStream})`);
 
     // Forward request to upstream (with channel proxy support)
     const response = await proxyRequest(url, "POST", headers, upstreamBody, channel.proxy);
@@ -64,7 +62,6 @@ export async function POST(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("[Proxy /v1/chat/completions] Error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return errorResponse(`Proxy error: ${message}`, 502);
   }

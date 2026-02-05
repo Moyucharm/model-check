@@ -78,7 +78,6 @@ export async function POST(request: NextRequest) {
       });
     }
   } catch (error) {
-    console.error("[API] Trigger detection error:", error);
     const message = error instanceof Error ? error.message : "启动检测失败";
     return NextResponse.json(
       { error: message, code: "DETECT_ERROR" },
@@ -93,7 +92,6 @@ export async function GET(request: NextRequest) {
     const progress = await getDetectionProgress();
     return NextResponse.json(progress);
   } catch (error) {
-    console.error("[API] Get progress error:", error);
     return NextResponse.json(
       { error: "获取检测进度失败", code: "PROGRESS_ERROR" },
       { status: 500 }
@@ -114,7 +112,6 @@ export async function DELETE(request: NextRequest) {
       cleared,
     });
   } catch (error) {
-    console.error("[API] Stop detection error:", error);
     const message = error instanceof Error ? error.message : "停止检测失败";
     return NextResponse.json(
       { error: message, code: "STOP_ERROR" },

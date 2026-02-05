@@ -47,7 +47,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(exportData);
   } catch (error) {
-    console.error("[API] Export channels error:", error);
     return NextResponse.json(
       { error: "Failed to export channels", code: "EXPORT_ERROR" },
       { status: 500 }

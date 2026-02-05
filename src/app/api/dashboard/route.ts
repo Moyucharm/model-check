@@ -1,22 +1,90 @@
-// GET /api/dashboard - Get channels and models status
+// GET /api/dashboard - Get channels and models status with pagination and filtering
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { isAuthenticated } from "@/lib/middleware/auth";
+import { Prisma } from "@/generated/prisma";
+
+const DEFAULT_PAGE_SIZE = 10;
 
 export async function GET(request: NextRequest) {
   const authenticated = isAuthenticated(request);
 
+  // Parse pagination parameters
+  const searchParams = request.nextUrl.searchParams;
+  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+  const pageSize = Math.max(1, Math.min(100, parseInt(searchParams.get("pageSize") || String(DEFAULT_PAGE_SIZE), 10)));
+
+  // Parse filter parameters
+  const search = searchParams.get("search")?.trim() || "";
+  const endpointFilter = searchParams.get("endpointFilter") || "all";
+  const statusFilter = searchParams.get("statusFilter") || "all";
+
   try {
-    // Fetch all enabled channels with models and recent check logs
+    // Build model filter conditions
+    const modelWhereConditions: Prisma.ModelWhereInput[] = [];
+
+    // Search filter - filter by model name
+    if (search) {
+      modelWhereConditions.push({
+        modelName: { contains: search, mode: "insensitive" },
+      });
+    }
+
+    // Endpoint filter - filter by detected endpoints (PostgreSQL native array)
+    if (endpointFilter !== "all") {
+      modelWhereConditions.push({
+        detectedEndpoints: { has: endpointFilter },
+      });
+    }
+
+    // Status filter - filter by lastStatus
+    if (statusFilter === "healthy") {
+      modelWhereConditions.push({ lastStatus: true });
+    } else if (statusFilter === "unhealthy") {
+      modelWhereConditions.push({ lastStatus: false });
+    } else if (statusFilter === "unknown") {
+      modelWhereConditions.push({ lastStatus: null });
+    }
+
+    const modelWhere: Prisma.ModelWhereInput | undefined =
+      modelWhereConditions.length > 0 ? { AND: modelWhereConditions } : undefined;
+
+    // Get channels that have at least one matching model (for filtered queries)
+    // or all enabled channels (for unfiltered queries)
+    const hasFilters = search || endpointFilter !== "all" || statusFilter !== "all";
+
+    let channelIds: string[] | undefined;
+    if (hasFilters) {
+      // Find channels that have matching models
+      const channelsWithMatchingModels = await prisma.channel.findMany({
+        where: {
+          enabled: true,
+          models: { some: modelWhere },
+        },
+        select: { id: true },
+      });
+      channelIds = channelsWithMatchingModels.map((c) => c.id);
+    }
+
+    // Get total count for pagination
+    const totalChannels = hasFilters
+      ? channelIds?.length || 0
+      : await prisma.channel.count({ where: { enabled: true } });
+
+    // Fetch paginated channels with filtered models
     const channels = await prisma.channel.findMany({
-      where: { enabled: true },
+      where: {
+        enabled: true,
+        ...(hasFilters && channelIds ? { id: { in: channelIds } } : {}),
+      },
       select: {
         id: true,
         name: true,
         baseUrl: authenticated, // Only show baseUrl to authenticated users
         createdAt: true,
         models: {
+          where: modelWhere,
           select: {
             id: true,
             modelName: true,
@@ -31,8 +99,9 @@ export async function GET(request: NextRequest) {
                 latency: true,
                 statusCode: true,
                 endpointType: true,
-                responseContent: true,
-                errorMsg: true,
+                // Only include sensitive fields for authenticated users
+                responseContent: authenticated,
+                errorMsg: authenticated,
                 createdAt: true,
               },
               orderBy: { createdAt: "desc" },
@@ -42,14 +111,35 @@ export async function GET(request: NextRequest) {
         },
       },
       orderBy: { name: "asc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
     });
 
-    // Calculate summary statistics based on checkLogs per endpoint
-    const totalChannels = channels.length;
-    const totalModels = channels.reduce((sum, ch) => sum + ch.models.length, 0);
+    // Calculate summary statistics for ALL channels (not just current page)
+    const allChannelsForStats = await prisma.channel.findMany({
+      where: { enabled: true },
+      select: {
+        models: {
+          select: {
+            id: true,
+            lastStatus: true,
+            checkLogs: {
+              select: {
+                status: true,
+                endpointType: true,
+              },
+              orderBy: { createdAt: "desc" },
+              take: 7,
+            },
+          },
+        },
+      },
+    });
+
+    const totalModels = allChannelsForStats.reduce((sum, ch) => sum + ch.models.length, 0);
 
     // A model is healthy if all its tested endpoints are successful
-    const healthyModels = channels.reduce((sum, ch) => {
+    const healthyModels = allChannelsForStats.reduce((sum, ch) => {
       return sum + ch.models.filter((m) => {
         if (m.checkLogs.length === 0) return false;
 
@@ -67,6 +157,8 @@ export async function GET(request: NextRequest) {
       }).length;
     }, 0);
 
+    const totalPages = Math.ceil(totalChannels / pageSize);
+
     return NextResponse.json({
       authenticated,
       summary: {
@@ -75,10 +167,15 @@ export async function GET(request: NextRequest) {
         healthyModels,
         healthRate: totalModels > 0 ? Math.round((healthyModels / totalModels) * 100) : 0,
       },
+      pagination: {
+        page,
+        pageSize,
+        totalPages,
+        totalChannels,
+      },
       channels,
     });
   } catch (error) {
-    console.error("[API] Dashboard error:", error);
     return NextResponse.json(
       { error: "Failed to fetch dashboard data", code: "FETCH_ERROR" },
       { status: 500 }

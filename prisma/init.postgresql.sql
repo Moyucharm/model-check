@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS "models" (
   "id" TEXT NOT NULL,
   "channel_id" TEXT NOT NULL,
   "model_name" VARCHAR(200) NOT NULL,
-  "detected_endpoints" JSONB,
+  "detected_endpoints" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   "last_status" BOOLEAN,
   "last_latency" INTEGER,
   "last_checked_at" TIMESTAMP(3),

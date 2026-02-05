@@ -16,7 +16,7 @@ let currentConfig = {
   enabled: ENV_AUTO_DETECT_ENABLED,
   cronSchedule: ENV_DETECTION_SCHEDULE,
   timezone: ENV_CRON_TIMEZONE,
-  detectAllChannels: true,
+  detectAllChannels: false,
   selectedChannelIds: null as string[] | null,
   selectedModelIds: null as Record<string, string[]> | null,
 };
@@ -43,11 +43,6 @@ export async function loadSchedulerConfig(): Promise<typeof currentConfig> {
         selectedChannelIds: config.selectedChannelIds as string[] | null,
         selectedModelIds: config.selectedModelIds as Record<string, string[]> | null,
       };
-      console.log("[Cron] Loaded config from database:", {
-        enabled: currentConfig.enabled,
-        schedule: currentConfig.cronSchedule,
-        detectAllChannels: currentConfig.detectAllChannels,
-      });
     } else {
       // Initialize database with environment defaults
       await prisma.schedulerConfig.create({
@@ -60,13 +55,17 @@ export async function loadSchedulerConfig(): Promise<typeof currentConfig> {
           maxGlobalConcurrency: parseInt(process.env.MAX_GLOBAL_CONCURRENCY || "30", 10),
           minDelayMs: parseInt(process.env.DETECTION_MIN_DELAY_MS || "3000", 10),
           maxDelayMs: parseInt(process.env.DETECTION_MAX_DELAY_MS || "5000", 10),
-          detectAllChannels: true,
+          detectAllChannels: false,
         },
       });
-      console.log("[Cron] Created default config from environment variables");
     }
   } catch (error) {
-    console.error("[Cron] Failed to load config from database, using env defaults:", error);
+    console.error("[Scheduler] Failed to load config from database, using defaults:", error);
+    // If database is unavailable, disable scheduler to avoid running with stale env defaults.
+    currentConfig = {
+      ...currentConfig,
+      enabled: false,
+    };
   }
 
   return currentConfig;
@@ -80,7 +79,6 @@ export async function startDetectionCronWithConfig(): Promise<CronJob | null> {
   await loadSchedulerConfig();
 
   if (!currentConfig.enabled) {
-    console.log("[Cron] Auto detection is disabled");
     return null;
   }
 
@@ -93,7 +91,6 @@ export async function startDetectionCronWithConfig(): Promise<CronJob | null> {
   detectionJob = new CronJob(
     currentConfig.cronSchedule,
     async () => {
-      console.log("[Cron] Starting scheduled detection with model sync...");
       try {
         let result;
 
@@ -108,17 +105,12 @@ export async function startDetectionCronWithConfig(): Promise<CronJob | null> {
           );
         }
 
-        console.log(
-          `[Cron] Detection scheduled: ${result.channelCount} channels, ${result.modelCount} models`
-        );
         if (result.syncResults) {
           const totalAdded = result.syncResults.reduce((sum, r) => sum + r.added, 0);
           if (totalAdded > 0) {
-            console.log(`[Cron] Model sync: ${totalAdded} new models added`);
           }
         }
       } catch (error) {
-        console.error("[Cron] Detection failed:", error);
       }
     },
     null, // onComplete
@@ -126,59 +118,6 @@ export async function startDetectionCronWithConfig(): Promise<CronJob | null> {
     currentConfig.timezone // timezone
   );
 
-  console.log(`[Cron] Detection job started with schedule: ${currentConfig.cronSchedule}`);
-  return detectionJob;
-}
-
-/**
- * Start detection cron job (legacy function for compatibility)
- */
-export function startDetectionCron(): CronJob | null {
-  if (!ENV_AUTO_DETECT_ENABLED) {
-    console.log("[Cron] Auto detection is disabled");
-    return null;
-  }
-
-  if (detectionJob) {
-    console.log("[Cron] Detection job already running");
-    return detectionJob;
-  }
-
-  detectionJob = new CronJob(
-    currentConfig.cronSchedule,
-    async () => {
-      console.log("[Cron] Starting scheduled detection with model sync...");
-      try {
-        let result;
-
-        if (currentConfig.detectAllChannels) {
-          result = await triggerFullDetection(true);
-        } else {
-          result = await triggerSelectiveDetection(
-            currentConfig.selectedChannelIds,
-            currentConfig.selectedModelIds
-          );
-        }
-
-        console.log(
-          `[Cron] Detection scheduled: ${result.channelCount} channels, ${result.modelCount} models`
-        );
-        if (result.syncResults) {
-          const totalAdded = result.syncResults.reduce((sum, r) => sum + r.added, 0);
-          if (totalAdded > 0) {
-            console.log(`[Cron] Model sync: ${totalAdded} new models added`);
-          }
-        }
-      } catch (error) {
-        console.error("[Cron] Detection failed:", error);
-      }
-    },
-    null, // onComplete
-    true, // start immediately
-    currentConfig.timezone // timezone
-  );
-
-  console.log(`[Cron] Detection job started with schedule: ${currentConfig.cronSchedule}`);
   return detectionJob;
 }
 
@@ -186,7 +125,6 @@ export function startDetectionCron(): CronJob | null {
  * Reload scheduler configuration and restart cron job
  */
 export async function reloadSchedulerConfig(): Promise<void> {
-  console.log("[Cron] Reloading scheduler configuration...");
 
   // Load new config from database
   await loadSchedulerConfig();
@@ -195,14 +133,12 @@ export async function reloadSchedulerConfig(): Promise<void> {
   if (detectionJob) {
     detectionJob.stop();
     detectionJob = null;
-    console.log("[Cron] Detection job stopped for reload");
   }
 
   // Start with new config if enabled
   if (currentConfig.enabled) {
     await startDetectionCronWithConfig();
   } else {
-    console.log("[Cron] Auto detection is disabled in new config");
   }
 }
 
@@ -211,19 +147,15 @@ export async function reloadSchedulerConfig(): Promise<void> {
  */
 export function startCleanupCron(): CronJob {
   if (cleanupJob) {
-    console.log("[Cron] Cleanup job already running");
     return cleanupJob;
   }
 
   cleanupJob = new CronJob(
     ENV_CLEANUP_SCHEDULE,
     async () => {
-      console.log("[Cron] Starting scheduled cleanup...");
       try {
         const result = await cleanupOldLogs();
-        console.log(`[Cron] Cleanup complete: ${result.deleted} logs removed`);
       } catch (error) {
-        console.error("[Cron] Cleanup failed:", error);
       }
     },
     null, // onComplete
@@ -231,7 +163,6 @@ export function startCleanupCron(): CronJob {
     ENV_CRON_TIMEZONE // timezone
   );
 
-  console.log(`[Cron] Cleanup job started with schedule: ${ENV_CLEANUP_SCHEDULE}`);
   return cleanupJob;
 }
 
@@ -241,8 +172,6 @@ export function startCleanupCron(): CronJob {
 export async function cleanupOldLogs(): Promise<{ deleted: number }> {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - ENV_LOG_RETENTION_DAYS);
-
-  console.log(`[Cleanup] Removing logs older than ${cutoffDate.toISOString()}`);
 
   const result = await prisma.checkLog.deleteMany({
     where: {
@@ -262,13 +191,11 @@ export function stopAllCrons(): void {
   if (detectionJob) {
     detectionJob.stop();
     detectionJob = null;
-    console.log("[Cron] Detection job stopped");
   }
 
   if (cleanupJob) {
     cleanupJob.stop();
     cleanupJob = null;
-    console.log("[Cron] Cleanup job stopped");
   }
 }
 
@@ -313,14 +240,6 @@ export function getCronStatus() {
  */
 export function getCurrentConfig() {
   return { ...currentConfig };
-}
-
-/**
- * Start all cron jobs
- */
-export function startAllCrons(): void {
-  startDetectionCron();
-  startCleanupCron();
 }
 
 /**

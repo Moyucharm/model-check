@@ -82,19 +82,15 @@ async function ensureParentDirectories(baseUrl: string, filename: string, header
       // 409 = Conflict (坚果云 already exists or parent missing)
       if (response.ok || response.status === 201 || response.status === 405 ||
           response.status === 301 || response.status === 302 || response.status === 409) {
-        console.log(`[WebDAV] Directory ensured: ${part} (status: ${response.status})`);
       } else if (response.status === 401) {
         throw new Error(`WebDAV authentication failed: invalid credentials`);
       } else if (response.status === 403) {
         // 403 on MKCOL usually means directory already exists or is the root sync folder
         // Try to continue - the actual PUT will fail if there's a real permission issue
-        console.log(`[WebDAV] MKCOL returned 403 for ${part}, assuming directory exists`);
       } else {
-        console.log(`[WebDAV] MKCOL returned ${response.status} for ${part}, continuing...`);
       }
     } catch (error) {
       // Network errors should be logged but not thrown - let PUT fail with clearer error
-      console.log(`[WebDAV] MKCOL error for ${part}: ${error}`);
     }
   }
 }
@@ -137,14 +133,6 @@ export async function POST(request: NextRequest) {
     const finalFilename = filename || ENV_WEBDAV_FILENAME;
 
     // Debug logging (remove in production)
-    console.log("[WebDAV] Config resolution:", {
-      urlSource: url ? "request" : "env",
-      usernameSource: username ? "request" : "env",
-      passwordSource: password ? "request" : "env",
-      filenameSource: filename ? "request" : "env",
-      hasPassword: !!finalPassword,
-      envPasswordSet: !!ENV_WEBDAV_PASSWORD,
-    });
 
     if (!action || !finalUrl) {
       return NextResponse.json(
@@ -251,7 +239,6 @@ export async function POST(request: NextRequest) {
           // If 404 or other error, just upload local data (no remote to merge)
         } catch {
           // Network error - proceed with local data only
-          console.log("[WebDAV] No remote data to merge, uploading local data only");
         }
       } else {
         replaced = 1; // Flag that we're replacing
@@ -367,6 +354,14 @@ export async function POST(request: NextRequest) {
 
       // If replace mode, use transaction to ensure atomicity
       if (mode === "replace") {
+        // Safety check: require at least 1 valid channel before deleting
+        if (validChannels.length === 0) {
+          return NextResponse.json(
+            { error: "Remote data contains no valid channels. Replace cancelled to prevent data loss.", code: "NO_VALID_CHANNELS" },
+            { status: 400 }
+          );
+        }
+
         // Perform delete and insert in a transaction
         await prisma.$transaction(async (tx) => {
           await tx.channel.deleteMany({});
@@ -493,7 +488,7 @@ export async function POST(request: NextRequest) {
               maxGlobalConcurrency: data.schedulerConfig.maxGlobalConcurrency as number ?? 30,
               minDelayMs: data.schedulerConfig.minDelayMs as number ?? 3000,
               maxDelayMs: data.schedulerConfig.maxDelayMs as number ?? 5000,
-              detectAllChannels: data.schedulerConfig.detectAllChannels as boolean ?? true,
+              detectAllChannels: data.schedulerConfig.detectAllChannels as boolean ?? false,
               selectedChannelIds: data.schedulerConfig.selectedChannelIds as string[] ?? null,
               selectedModelIds: data.schedulerConfig.selectedModelIds as Record<string, string[]> ?? null,
             },
@@ -506,14 +501,13 @@ export async function POST(request: NextRequest) {
               maxGlobalConcurrency: data.schedulerConfig.maxGlobalConcurrency as number ?? 30,
               minDelayMs: data.schedulerConfig.minDelayMs as number ?? 3000,
               maxDelayMs: data.schedulerConfig.maxDelayMs as number ?? 5000,
-              detectAllChannels: data.schedulerConfig.detectAllChannels as boolean ?? true,
+              detectAllChannels: data.schedulerConfig.detectAllChannels as boolean ?? false,
               selectedChannelIds: data.schedulerConfig.selectedChannelIds as string[] ?? null,
               selectedModelIds: data.schedulerConfig.selectedModelIds as Record<string, string[]> ?? null,
             },
           });
           schedulerConfigRestored = true;
         } catch (error) {
-          console.error("[WebDAV] Failed to restore scheduler config:", error);
         }
       }
 
@@ -542,7 +536,6 @@ export async function POST(request: NextRequest) {
             }
             // Don't create new keys from WebDAV (security: keys should be created locally)
           } catch (error) {
-            console.error(`[WebDAV] Failed to restore proxy key ${pk.name}:`, error);
           }
         }
       }
@@ -568,7 +561,6 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   } catch (error) {
-    console.error("[API] WebDAV sync error:", error);
     const message = error instanceof Error ? error.message : "WebDAV sync failed";
     return NextResponse.json(
       { error: message, code: "WEBDAV_ERROR" },

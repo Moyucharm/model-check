@@ -2,9 +2,9 @@
 
 import prisma from "@/lib/prisma";
 import { getEndpointsToTest, fetchModels } from "@/lib/detection";
-import { addDetectionJobsBulk, getQueueStats, getTestingModelIds } from "./queue";
+import { addDetectionJobsBulk, getQueueStats, getTestingModelIds, clearStoppedFlag } from "./queue";
 import type { DetectionJobData } from "@/lib/detection/types";
-import { EndpointType } from "@prisma/client";
+import { EndpointType } from "@/generated/prisma";
 
 /**
  * Trigger detection for all enabled channels
@@ -16,17 +16,33 @@ export async function triggerFullDetection(syncModelsFirst: boolean = false): Pr
   jobIds: string[];
   syncResults?: { channelId: string; added: number; total: number }[];
 }> {
-  console.log("[Service] Starting full detection...");
+
+  // Clear stopped flag from previous detection stop
+  await clearStoppedFlag();
 
   // Fetch all enabled channels
   const channels = await prisma.channel.findMany({
     where: { enabled: true },
   });
 
+  // Reset all models status to "untested" state before detection
+  // This clears the UI display while preserving checkLogs history
+  const channelIds = channels.map((c) => c.id);
+  if (channelIds.length > 0) {
+    await prisma.model.updateMany({
+      where: { channelId: { in: channelIds } },
+      data: {
+        lastStatus: null,
+        lastLatency: null,
+        lastCheckedAt: null,
+        detectedEndpoints: [],
+      },
+    });
+  }
+
   // Optionally sync models from remote API first
   let syncResults: { channelId: string; added: number; total: number }[] | undefined;
   if (syncModelsFirst) {
-    console.log("[Service] Syncing models from remote APIs...");
     syncResults = [];
     for (const channel of channels) {
       try {
@@ -37,10 +53,8 @@ export async function triggerFullDetection(syncModelsFirst: boolean = false): Pr
           total: result.total,
         });
       } catch (error) {
-        console.error(`[Service] Failed to sync models for channel ${channel.name}:`, error);
       }
     }
-    console.log(`[Service] Model sync complete for ${syncResults.length} channels`);
   }
 
   // Re-fetch channels with updated models
@@ -79,14 +93,11 @@ export async function triggerFullDetection(syncModelsFirst: boolean = false): Pr
   }
 
   if (jobs.length === 0) {
-    console.log("[Service] No models to detect");
     return { channelCount: 0, modelCount: 0, jobIds: [], syncResults };
   }
 
   // Add all jobs to queue
   const jobIds = await addDetectionJobsBulk(jobs);
-
-  console.log(`[Service] Queued ${jobs.length} detection jobs`);
 
   return {
     channelCount: channelsWithModels.length,
@@ -108,7 +119,9 @@ export async function triggerChannelDetection(
   modelCount: number;
   jobIds: string[];
 }> {
-  console.log(`[Service] Starting detection for channel: ${channelId}`);
+
+  // Clear stopped flag from previous detection stop
+  await clearStoppedFlag();
 
   const channel = await prisma.channel.findUnique({
     where: { id: channelId },
@@ -136,6 +149,20 @@ export async function triggerChannelDetection(
     ? channel.models.filter((m) => modelIds.includes(m.id))
     : channel.models;
 
+  // Reset models status to "untested" state before detection
+  if (modelsToTest.length > 0) {
+    const modelIdsToReset = modelsToTest.map((m) => m.id);
+    await prisma.model.updateMany({
+      where: { id: { in: modelIdsToReset } },
+      data: {
+        lastStatus: null,
+        lastLatency: null,
+        lastCheckedAt: null,
+        detectedEndpoints: [],
+      },
+    });
+  }
+
   const jobs: DetectionJobData[] = [];
 
   for (const model of modelsToTest) {
@@ -161,8 +188,6 @@ export async function triggerChannelDetection(
 
   const jobIds = await addDetectionJobsBulk(jobs);
 
-  console.log(`[Service] Queued ${jobs.length} detection jobs for channel: ${channel.name}`);
-
   return { modelCount: jobs.length, jobIds };
 }
 
@@ -172,7 +197,9 @@ export async function triggerChannelDetection(
 export async function triggerModelDetection(modelId: string): Promise<{
   jobIds: string[];
 }> {
-  console.log(`[Service] Starting detection for model: ${modelId}`);
+
+  // Clear stopped flag from previous detection stop
+  await clearStoppedFlag();
 
   const model = await prisma.model.findUnique({
     where: { id: modelId },
@@ -186,6 +213,17 @@ export async function triggerModelDetection(modelId: string): Promise<{
   if (!model.channel.enabled) {
     throw new Error(`Channel is disabled: ${model.channel.id}`);
   }
+
+  // Reset model status to "untested" state before detection
+  await prisma.model.update({
+    where: { id: modelId },
+    data: {
+      lastStatus: null,
+      lastLatency: null,
+      lastCheckedAt: null,
+      detectedEndpoints: [],
+    },
+  });
 
   // Get all endpoints to test for this model
   const endpointsToTest = getEndpointsToTest(model.modelName);
@@ -202,8 +240,6 @@ export async function triggerModelDetection(modelId: string): Promise<{
 
   const jobIds = await addDetectionJobsBulk(jobs);
 
-  console.log(`[Service] Queued ${jobs.length} detection jobs for model: ${model.modelName}`);
-
   return { jobIds };
 }
 
@@ -215,7 +251,6 @@ export async function syncChannelModels(channelId: string): Promise<{
   removed: number;
   total: number;
 }> {
-  console.log(`[Service] Syncing models for channel: ${channelId}`);
 
   const channel = await prisma.channel.findUnique({
     where: { id: channelId },
@@ -226,10 +261,15 @@ export async function syncChannelModels(channelId: string): Promise<{
   }
 
   // Fetch models from API
-  const remoteModels = await fetchModels(channel.baseUrl, channel.apiKey, channel.proxy);
+  const result = await fetchModels(channel.baseUrl, channel.apiKey, channel.proxy);
+
+  if (result.error) {
+    throw new Error(`获取模型列表失败: ${result.error}`);
+  }
+
+  const remoteModels = result.models;
 
   if (remoteModels.length === 0) {
-    console.log("[Service] No models found from remote API");
     return { added: 0, removed: 0, total: 0 };
   }
 
@@ -254,7 +294,6 @@ export async function syncChannelModels(channelId: string): Promise<{
       data: toAdd.map((modelName) => ({
         channelId,
         modelName,
-        detectedEndpoints: [] as EndpointType[],
       })),
       skipDuplicates: true,
     });
@@ -271,8 +310,6 @@ export async function syncChannelModels(channelId: string): Promise<{
   // }
 
   const total = remoteModels.length;
-
-  console.log(`[Service] Sync complete: +${toAdd.length}, -${toRemove.length}, total: ${total}`);
 
   return {
     added: toAdd.length,
@@ -315,7 +352,9 @@ export async function triggerSelectiveDetection(
   jobIds: string[];
   syncResults?: { channelId: string; added: number; total: number }[];
 }> {
-  console.log("[Service] Starting selective detection...");
+
+  // Clear stopped flag from previous detection stop
+  await clearStoppedFlag();
 
   // If no specific channels selected, fall back to full detection
   if (!channelIds || channelIds.length === 0) {
@@ -331,7 +370,6 @@ export async function triggerSelectiveDetection(
   });
 
   if (channels.length === 0) {
-    console.log("[Service] No enabled channels found in selection");
     return { channelCount: 0, modelCount: 0, jobIds: [] };
   }
 
@@ -346,7 +384,6 @@ export async function triggerSelectiveDetection(
         total: result.total,
       });
     } catch (error) {
-      console.error(`[Service] Failed to sync models for channel ${channel.name}:`, error);
     }
   }
 
@@ -397,13 +434,10 @@ export async function triggerSelectiveDetection(
   }
 
   if (jobs.length === 0) {
-    console.log("[Service] No models to detect in selection");
     return { channelCount: 0, modelCount: 0, jobIds: [], syncResults };
   }
 
   const jobIds = await addDetectionJobsBulk(jobs);
-
-  console.log(`[Service] Queued ${jobs.length} selective detection jobs`);
 
   return {
     channelCount: channelsWithModels.length,

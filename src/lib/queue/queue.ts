@@ -3,9 +3,7 @@
 import { Queue, QueueEvents } from "bullmq";
 import redis from "@/lib/redis";
 import type { DetectionJobData } from "@/lib/detection/types";
-
-// Queue names
-export const DETECTION_QUEUE_NAME = "detection-queue";
+import { DETECTION_QUEUE_NAME, DETECTION_STOPPED_KEY, DETECTION_STOPPED_TTL } from "./constants";
 
 // Queue instance (singleton)
 let detectionQueue: Queue<DetectionJobData> | null = null;
@@ -168,50 +166,57 @@ export async function clearQueue(): Promise<void> {
 export async function pauseAndDrainQueue(): Promise<{ cleared: number }> {
   const queue = getDetectionQueue();
 
+  // Set stopped flag so workers skip remaining jobs
+  await redis.set(DETECTION_STOPPED_KEY, "1", "EX", DETECTION_STOPPED_TTL);
+
   // Pause the queue globally to prevent new jobs from being processed across all workers
   await queue.pause();
 
-  // Get counts before clearing
-  const [waiting, delayed, activeJobs] = await Promise.all([
-    queue.getWaitingCount(),
-    queue.getDelayedCount(),
-    queue.getJobs(["active"], 0, 1000),
-  ]);
+  let cleared = 0;
 
-  const activeCount = activeJobs.length;
+  try {
+    // Get counts before clearing
+    const [waiting, delayed, activeJobs] = await Promise.all([
+      queue.getWaitingCount(),
+      queue.getDelayedCount(),
+      queue.getJobs(["active"], 0, 1000),
+    ]);
 
-  // Move active jobs to failed state to stop them
-  // This signals the worker to stop processing these jobs
-  const failPromises = activeJobs.map(async (job) => {
-    try {
-      // Use discardJob for safer cancellation, fallback to moveToFailed
-      if (job.token) {
-        await job.moveToFailed(new Error("Detection stopped by user"), job.token, true);
-      } else {
-        // If no token, try to remove the job directly
-        await job.remove().catch(() => {});
+    const activeCount = activeJobs.length;
+
+    // Move active jobs to failed state to stop them
+    // This signals the worker to stop processing these jobs
+    const failPromises = activeJobs.map(async (job) => {
+      try {
+        // Use discardJob for safer cancellation, fallback to moveToFailed
+        if (job.token) {
+          await job.moveToFailed(new Error("Detection stopped by user"), job.token, true);
+        } else {
+          // If no token, try to remove the job directly
+          await job.remove().catch(() => {});
+        }
+      } catch (err) {
+        // Job may have completed or already failed, ignore
       }
-    } catch (err) {
-      // Job may have completed or already failed, ignore
-      console.log(`[Queue] Could not stop job ${job.id}:`, err instanceof Error ? err.message : err);
+    });
+    await Promise.allSettled(failPromises);
+
+    // Drain waiting and delayed jobs (true = also drain delayed)
+    await queue.drain(true);
+
+    // Clear Redis semaphore counters to reset concurrency tracking
+    const semaphoreKeys = await redis.keys("detection:semaphore:*");
+    if (semaphoreKeys.length > 0) {
+      await redis.del(...semaphoreKeys);
     }
-  });
-  await Promise.allSettled(failPromises);
 
-  // Drain waiting and delayed jobs (true = also drain delayed)
-  await queue.drain(true);
-
-  // Clear Redis semaphore counters to reset concurrency tracking
-  const redis = (await import("@/lib/redis")).default;
-  const semaphoreKeys = await redis.keys("detection:semaphore:*");
-  if (semaphoreKeys.length > 0) {
-    await redis.del(...semaphoreKeys);
+    cleared = waiting + delayed + activeCount;
+  } finally {
+    // Always resume queue, even if an error occurred during cleanup
+    await queue.resume();
   }
 
-  // Resume queue for future jobs
-  await queue.resume();
-
-  return { cleared: waiting + delayed + activeCount };
+  return { cleared };
 }
 
 /**
@@ -226,4 +231,19 @@ export async function closeQueue(): Promise<void> {
     await queueEvents.close();
     queueEvents = null;
   }
+}
+
+/**
+ * Check if detection has been stopped by user
+ */
+export async function isDetectionStopped(): Promise<boolean> {
+  const value = await redis.get(DETECTION_STOPPED_KEY);
+  return value === "1";
+}
+
+/**
+ * Clear the detection stopped flag (called when starting new detection)
+ */
+export async function clearStoppedFlag(): Promise<void> {
+  await redis.del(DETECTION_STOPPED_KEY);
 }

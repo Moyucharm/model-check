@@ -59,4 +59,14 @@ next-env.d.ts
 
 # claude code
 .claude/
+
+# DevBooks
+.devbooks/
+/dev-playbooks/
+evidence/
+*.tmp
+*.bak
+
+package-lock.json
+.npmignore
 nul
