@@ -67,6 +67,5 @@ evidence/
 *.tmp
 *.bak
 
-package-lock.json
 .npmignore
 nul
