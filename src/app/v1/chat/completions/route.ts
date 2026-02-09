@@ -33,10 +33,12 @@ function normalizeMessagesForGeminiCli(messages: unknown): unknown {
       return msg;
     }
 
-    return {
-      ...msg,
-      content: CLI_DETECT_PROMPT,
-    };
+    // 只在 content 缺失或为空时补上默认值，否则保留用户原始消息
+    if (!msg.content) {
+      return { ...msg, content: CLI_DETECT_PROMPT };
+    }
+
+    return msg;
   });
 }
 
