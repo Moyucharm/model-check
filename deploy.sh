@@ -142,6 +142,28 @@ show_help() {
     exit 0
 }
 
+# 同步数据库结构（优先使用 Prisma Schema）
+sync_schema_with_prisma() {
+    local compose_cmd=$1
+    local max_attempts=5
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        if $compose_cmd exec -T app node node_modules/prisma/build/index.js db push --schema prisma/schema.prisma; then
+            success "Prisma Schema 同步完成"
+            return 0
+        fi
+
+        if [ $attempt -lt $max_attempts ]; then
+            warn "Prisma db push 失败（$attempt/$max_attempts），2 秒后重试..."
+            sleep 2
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
 # 更新部署
 do_update() {
     info "更新部署..."
@@ -168,16 +190,19 @@ do_update() {
     info "重启服务..."
     $compose_cmd up -d --build
 
-    # 初始化数据库（本地 PostgreSQL 容器）
-    if docker ps --format '{{.Names}}' | grep -q "model-check-postgres"; then
-        info "等待数据库就绪..."
-        sleep 5
-
-        info "同步数据库表结构..."
-        if cat prisma/init.postgresql.sql | $compose_cmd exec -T postgres psql -U modelcheck -d model_check; then
-            success "数据库同步完成"
+    info "同步数据库表结构..."
+    if sync_schema_with_prisma "$compose_cmd"; then
+        success "数据库同步完成"
+    else
+        warn "Prisma db push 失败，尝试使用 init.postgresql.sql 兜底..."
+        if docker ps --format '{{.Names}}' | grep -q "model-check-postgres"; then
+            if cat prisma/init.postgresql.sql | $compose_cmd exec -T postgres psql -U modelcheck -d model_check; then
+                success "SQL 兜底同步完成"
+            else
+                warn "SQL 兜底同步失败，请检查数据库连接与权限"
+            fi
         else
-            warn "数据库同步失败，可能表已存在（可忽略）"
+            warn "未检测到本地 PostgreSQL 容器，无法使用 SQL 兜底，请检查 DATABASE_URL 与网络后重试"
         fi
     fi
 
@@ -357,6 +382,20 @@ generate_secret() {
     fi
 }
 
+# 跨平台 sed 原地编辑（兼容 macOS BSD sed）
+sed_i() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
+# sed 替换串转义（使用 | 作为分隔符时）
+escape_for_sed() {
+    printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+}
+
 # 创建 .env 文件
 setup_env() {
     local mode=$1
@@ -379,23 +418,23 @@ setup_env() {
     # 设置部署模式
     case $mode in
         local)
-            sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="local"/' .env
+            sed_i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="local"/' .env
             ;;
         cloud-db)
-            sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="redis"/' .env
+            sed_i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="redis"/' .env
             ;;
         cloud-redis)
-            sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="db"/' .env
+            sed_i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES="db"/' .env
             ;;
         cloud)
-            sed -i 's/^COMPOSE_PROFILES=.*/#COMPOSE_PROFILES=""/' .env
+            sed_i 's/^COMPOSE_PROFILES=.*/#COMPOSE_PROFILES=""/' .env
             ;;
     esac
 
     # 配置端口（如果默认端口被占用）
     if [ "$REDIS_PORT_TO_USE" != "6379" ]; then
         info "配置 Redis 端口: $REDIS_PORT_TO_USE"
-        sed -i "s|^# REDIS_PORT=.*|REDIS_PORT=\"$REDIS_PORT_TO_USE\"|" .env
+        sed_i "s|^# REDIS_PORT=.*|REDIS_PORT=\"$REDIS_PORT_TO_USE\"|" .env
         if ! grep -q "^REDIS_PORT=" .env; then
             echo "REDIS_PORT=\"$REDIS_PORT_TO_USE\"" >> .env
         fi
@@ -403,7 +442,7 @@ setup_env() {
 
     if [ "$POSTGRES_PORT_TO_USE" != "5432" ]; then
         info "配置 PostgreSQL 端口: $POSTGRES_PORT_TO_USE"
-        sed -i "s|^# POSTGRES_PORT=.*|POSTGRES_PORT=\"$POSTGRES_PORT_TO_USE\"|" .env
+        sed_i "s|^# POSTGRES_PORT=.*|POSTGRES_PORT=\"$POSTGRES_PORT_TO_USE\"|" .env
         if ! grep -q "^POSTGRES_PORT=" .env; then
             echo "POSTGRES_PORT=\"$POSTGRES_PORT_TO_USE\"" >> .env
         fi
@@ -411,8 +450,8 @@ setup_env() {
 
     # 生成 JWT 密钥
     local jwt_secret=$(generate_secret)
-    local jwt_secret_escaped=$(echo "$jwt_secret" | sed 's/[&/\]/\\&/g')
-    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=\"$jwt_secret_escaped\"|" .env
+    local jwt_secret_escaped=$(escape_for_sed "$jwt_secret")
+    sed_i "s|^JWT_SECRET=.*|JWT_SECRET=\"$jwt_secret_escaped\"|" .env
     success "已生成 JWT 密钥"
 
     # 设置管理员密码
@@ -420,11 +459,11 @@ setup_env() {
     read -sp "请输入管理员密码 (留空使用默认 admin123): " admin_pwd
     echo ""
     if [ -n "$admin_pwd" ]; then
-        local admin_pwd_escaped=$(echo "$admin_pwd" | sed 's/[&/\]/\\&/g')
-        sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=\"$admin_pwd_escaped\"|" .env
+        local admin_pwd_escaped=$(escape_for_sed "$admin_pwd")
+        sed_i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=\"$admin_pwd_escaped\"|" .env
         success "已设置管理员密码"
     else
-        sed -i 's|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD="admin123"|' .env
+        sed_i 's|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD="admin123"|' .env
         warn "使用默认密码 admin123，建议后续修改"
     fi
 
@@ -439,9 +478,9 @@ setup_env() {
         read -p "数据库连接字符串: " db_url
         if [ -n "$db_url" ]; then
             # 转义特殊字符
-            db_url_escaped=$(echo "$db_url" | sed 's/[&/\]/\\&/g')
-            sed -i "s|^# DOCKER_DATABASE_URL=.*|DOCKER_DATABASE_URL=\"$db_url_escaped\"|" .env
-            sed -i "s|^#DOCKER_DATABASE_URL=.*|DOCKER_DATABASE_URL=\"$db_url_escaped\"|" .env
+            db_url_escaped=$(escape_for_sed "$db_url")
+            sed_i "s|^# DOCKER_DATABASE_URL=.*|DOCKER_DATABASE_URL=\"$db_url_escaped\"|" .env
+            sed_i "s|^#DOCKER_DATABASE_URL=.*|DOCKER_DATABASE_URL=\"$db_url_escaped\"|" .env
             success "已配置云数据库"
         else
             error "云数据库模式必须提供连接字符串"
@@ -458,9 +497,9 @@ setup_env() {
         echo ""
         read -p "Redis 连接字符串: " redis_url
         if [ -n "$redis_url" ]; then
-            redis_url_escaped=$(echo "$redis_url" | sed 's/[&/\]/\\&/g')
-            sed -i "s|^# DOCKER_REDIS_URL=.*|DOCKER_REDIS_URL=\"$redis_url_escaped\"|" .env
-            sed -i "s|^#DOCKER_REDIS_URL=.*|DOCKER_REDIS_URL=\"$redis_url_escaped\"|" .env
+            redis_url_escaped=$(escape_for_sed "$redis_url")
+            sed_i "s|^# DOCKER_REDIS_URL=.*|DOCKER_REDIS_URL=\"$redis_url_escaped\"|" .env
+            sed_i "s|^#DOCKER_REDIS_URL=.*|DOCKER_REDIS_URL=\"$redis_url_escaped\"|" .env
             success "已配置云 Redis"
         else
             error "云 Redis 模式必须提供连接字符串"
@@ -483,8 +522,8 @@ setup_env() {
     # 代理密钥配置
     read -p "设置代理接口密钥 (留空则自动生成，重启后会变化): " proxy_key
     if [ -n "$proxy_key" ]; then
-        local proxy_key_escaped=$(echo "$proxy_key" | sed 's/[&/\]/\\&/g')
-        sed -i "s|^# PROXY_API_KEY=.*|PROXY_API_KEY=\"$proxy_key_escaped\"|" .env
+        local proxy_key_escaped=$(escape_for_sed "$proxy_key")
+        sed_i "s|^# PROXY_API_KEY=.*|PROXY_API_KEY=\"$proxy_key_escaped\"|" .env
         success "已设置代理密钥"
     fi
 
@@ -499,21 +538,21 @@ setup_env() {
 
         read -p "WebDAV URL (如 https://dav.jianguoyun.com/dav/sync): " webdav_url
         if [ -n "$webdav_url" ]; then
-            webdav_url_escaped=$(echo "$webdav_url" | sed 's/[&/\]/\\&/g')
-            sed -i "s|^# WEBDAV_URL=.*|WEBDAV_URL=\"$webdav_url_escaped\"|" .env
+            webdav_url_escaped=$(escape_for_sed "$webdav_url")
+            sed_i "s|^# WEBDAV_URL=.*|WEBDAV_URL=\"$webdav_url_escaped\"|" .env
         fi
 
         read -p "WebDAV 用户名: " webdav_user
         if [ -n "$webdav_user" ]; then
-            webdav_user_escaped=$(echo "$webdav_user" | sed 's/[&/\]/\\&/g')
-            sed -i "s|^# WEBDAV_USERNAME=.*|WEBDAV_USERNAME=\"$webdav_user_escaped\"|" .env
+            webdav_user_escaped=$(escape_for_sed "$webdav_user")
+            sed_i "s|^# WEBDAV_USERNAME=.*|WEBDAV_USERNAME=\"$webdav_user_escaped\"|" .env
         fi
 
         read -sp "WebDAV 密码/应用密码: " webdav_pass
         echo ""
         if [ -n "$webdav_pass" ]; then
-            webdav_pass_escaped=$(echo "$webdav_pass" | sed 's/[&/\]/\\&/g')
-            sed -i "s|^# WEBDAV_PASSWORD=.*|WEBDAV_PASSWORD=\"$webdav_pass_escaped\"|" .env
+            webdav_pass_escaped=$(escape_for_sed "$webdav_pass")
+            sed_i "s|^# WEBDAV_PASSWORD=.*|WEBDAV_PASSWORD=\"$webdav_pass_escaped\"|" .env
         fi
 
         if [ -n "$webdav_url" ] && [ -n "$webdav_user" ] && [ -n "$webdav_pass" ]; then
@@ -527,8 +566,8 @@ setup_env() {
     echo ""
     read -p "全局代理地址 (如 http://127.0.0.1:7890，留空跳过): " global_proxy
     if [ -n "$global_proxy" ]; then
-        global_proxy_escaped=$(echo "$global_proxy" | sed 's/[&/\]/\\&/g')
-        sed -i "s|^# GLOBAL_PROXY=.*|GLOBAL_PROXY=\"$global_proxy_escaped\"|" .env
+        global_proxy_escaped=$(escape_for_sed "$global_proxy")
+        sed_i "s|^# GLOBAL_PROXY=.*|GLOBAL_PROXY=\"$global_proxy_escaped\"|" .env
         success "已设置全局代理"
     fi
 
@@ -552,10 +591,11 @@ start_services() {
         $compose_cmd up -d --build
     else
         info "拉取预构建镜像..."
-        if $compose_cmd pull app; then
+        if $compose_cmd pull app 2>/dev/null; then
             $compose_cmd up -d
         else
-            error "无法拉取镜像，已中止启动"
+            warn "无法拉取预构建镜像，自动切换到本地构建..."
+            $compose_cmd up -d --build
         fi
     fi
 
@@ -593,8 +633,9 @@ init_database() {
         compose_cmd="docker-compose"
     fi
 
-    # 检查是否有本项目的 PostgreSQL 容器
+    local has_local_postgres="false"
     if docker ps --format '{{.Names}}' | grep -q "model-check-postgres"; then
+        has_local_postgres="true"
         info "等待数据库就绪..."
         local max_attempts=30
         local attempt=0
@@ -612,18 +653,23 @@ init_database() {
             warn "等待数据库超时，尝试继续..."
         fi
 
-        # 使用项目自带的 SQL 脚本初始化数据库
-        info "创建数据库表..."
-        if cat prisma/init.postgresql.sql | $compose_cmd exec -T postgres psql -U modelcheck -d model_check; then
-            success "数据库初始化完成"
-        else
-            warn "数据库初始化失败，可能表已存在（可忽略）"
-        fi
+    fi
+
+    info "同步数据库结构..."
+    if sync_schema_with_prisma "$compose_cmd"; then
+        success "数据库初始化完成"
     else
-        # 云数据库模式，跳过自动初始化
-        warn "未检测到本地 PostgreSQL 容器（云数据库模式）"
-        info "请手动执行数据库初始化:"
-        echo "  psql \$DATABASE_URL < prisma/init.postgresql.sql"
+        warn "Prisma db push 失败，尝试使用 init.postgresql.sql 兜底..."
+        if [ "$has_local_postgres" = "true" ]; then
+            if cat prisma/init.postgresql.sql | $compose_cmd exec -T postgres psql -U modelcheck -d model_check; then
+                success "SQL 兜底同步完成"
+            else
+                warn "SQL 兜底同步失败，请检查数据库连接与权限"
+            fi
+        else
+            warn "未检测到本地 PostgreSQL 容器，且 Prisma db push 失败"
+            info "请检查 .env 中 DATABASE_URL/DOCKER_DATABASE_URL 并重试"
+        fi
     fi
 }
 

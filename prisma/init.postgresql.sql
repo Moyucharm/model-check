@@ -40,9 +40,24 @@ CREATE TABLE IF NOT EXISTS "channels" (
   "proxy" VARCHAR(500),
   "enabled" BOOLEAN NOT NULL DEFAULT true,
   "sort_order" INTEGER NOT NULL DEFAULT 0,
+  "key_mode" TEXT NOT NULL DEFAULT 'single',
+  "route_strategy" TEXT NOT NULL DEFAULT 'round_robin',
   "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "channel_keys" (
+  "id" TEXT NOT NULL,
+  "channel_id" TEXT NOT NULL,
+  "api_key" TEXT NOT NULL,
+  "name" VARCHAR(100),
+  "last_valid" BOOLEAN,
+  "last_checked_at" TIMESTAMP(3),
+  "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY ("id"),
+  CONSTRAINT "channel_keys_channel_id_fkey" FOREIGN KEY ("channel_id") REFERENCES "channels"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "models" (
@@ -53,11 +68,13 @@ CREATE TABLE IF NOT EXISTS "models" (
   "last_status" BOOLEAN,
   "last_latency" INTEGER,
   "last_checked_at" TIMESTAMP(3),
+  "channel_key_id" TEXT,
   "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id"),
-  CONSTRAINT "models_channel_id_model_name_key" UNIQUE ("channel_id", "model_name"),
-  CONSTRAINT "models_channel_id_fkey" FOREIGN KEY ("channel_id") REFERENCES "channels"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  CONSTRAINT "models_channel_id_model_name_channel_key_id_key" UNIQUE ("channel_id", "model_name", "channel_key_id"),
+  CONSTRAINT "models_channel_id_fkey" FOREIGN KEY ("channel_id") REFERENCES "channels"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT "models_channel_key_id_fkey" FOREIGN KEY ("channel_key_id") REFERENCES "channel_keys"("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "check_logs" (
@@ -106,6 +123,15 @@ CREATE TABLE IF NOT EXISTS "proxy_keys" (
   CONSTRAINT "proxy_keys_key_key" UNIQUE ("key")
 );
 
+CREATE TABLE IF NOT EXISTS "model_keywords" (
+  "id" TEXT NOT NULL,
+  "keyword" VARCHAR(100) NOT NULL,
+  "enabled" BOOLEAN NOT NULL DEFAULT true,
+  "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY ("id")
+);
+
 -- ==========================================
 -- 3. 兼容升级：逐字段补齐（已存在则跳过）
 -- ==========================================
@@ -113,12 +139,22 @@ CREATE TABLE IF NOT EXISTS "proxy_keys" (
 -- channels: 后加的排序字段
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "proxy" VARCHAR(500);
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "sort_order" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "key_mode" TEXT NOT NULL DEFAULT 'single';
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "route_strategy" TEXT NOT NULL DEFAULT 'round_robin';
+
+-- channel_keys: 多 Key 字段
+ALTER TABLE "channel_keys" ADD COLUMN IF NOT EXISTS "name" VARCHAR(100);
+ALTER TABLE "channel_keys" ADD COLUMN IF NOT EXISTS "last_valid" BOOLEAN;
+ALTER TABLE "channel_keys" ADD COLUMN IF NOT EXISTS "last_checked_at" TIMESTAMP(3);
+ALTER TABLE "channel_keys" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE "channel_keys" ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 -- models: 后加的检测端点、状态字段
 ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "detected_endpoints" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "last_status" BOOLEAN;
 ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "last_latency" INTEGER;
 ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "last_checked_at" TIMESTAMP(3);
+ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "channel_key_id" TEXT;
 
 -- check_logs: 后加的状态码、响应内容字段
 ALTER TABLE "check_logs" ADD COLUMN IF NOT EXISTS "latency" INTEGER;
@@ -144,8 +180,52 @@ ALTER TABLE "proxy_keys" ADD COLUMN IF NOT EXISTS "last_used_at" TIMESTAMP(3);
 ALTER TABLE "proxy_keys" ADD COLUMN IF NOT EXISTS "usage_count" INTEGER NOT NULL DEFAULT 0;
 
 -- ==========================================
--- 4. 索引（已存在则跳过）
+-- 4. 约束兼容（已存在则跳过）
+-- ==========================================
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'channel_keys_channel_id_fkey'
+  ) THEN
+    ALTER TABLE "channel_keys"
+      ADD CONSTRAINT "channel_keys_channel_id_fkey"
+      FOREIGN KEY ("channel_id") REFERENCES "channels"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'models_channel_key_id_fkey'
+  ) THEN
+    ALTER TABLE "models"
+      ADD CONSTRAINT "models_channel_key_id_fkey"
+      FOREIGN KEY ("channel_key_id") REFERENCES "channel_keys"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'models_channel_id_model_name_key'
+  ) THEN
+    ALTER TABLE "models" DROP CONSTRAINT "models_channel_id_model_name_key";
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'models_channel_id_model_name_channel_key_id_key'
+  ) THEN
+    ALTER TABLE "models"
+      ADD CONSTRAINT "models_channel_id_model_name_channel_key_id_key"
+      UNIQUE ("channel_id", "model_name", "channel_key_id");
+  END IF;
+END $$;
+
+-- ==========================================
+-- 5. 索引（已存在则跳过）
 -- ==========================================
 
 CREATE INDEX IF NOT EXISTS "check_logs_model_id_created_at_idx" ON "check_logs"("model_id", "created_at");
 CREATE INDEX IF NOT EXISTS "check_logs_created_at_idx" ON "check_logs"("created_at");
+CREATE INDEX IF NOT EXISTS "channel_keys_channel_id_idx" ON "channel_keys"("channel_id");
+CREATE INDEX IF NOT EXISTS "models_channel_key_id_idx" ON "models"("channel_key_id");

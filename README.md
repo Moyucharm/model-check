@@ -1,83 +1,78 @@
 # Model Check
 
-AI 模型 API 渠道可用性监控面板 & 统一代理网关。
-
-自动检测多个 API 渠道的模型可用性和响应延迟，同时提供兼容 OpenAI / Anthropic / Gemini 格式的统一代理转发接口。
+AI 模型 API 渠道可用性检测与统一代理平台。管理多个 AI API 渠道，定期检测各模型可用性，并提供兼容 OpenAI / Claude / Gemini 的统一代理接口。
 
 ## 功能特性
 
-- **多渠道管理** — 集中管理 OpenAI、Claude、Gemini 等多家 API 提供商
-- **多 Key 支持** — 每个渠道可配置多个 API Key，同步时自动合并不同 Key 的模型列表
-- **关键词筛选** — 通过关键词模糊匹配筛选同步的模型（支持启用/禁用）
-- **定时可用性检测** — Cron 定时任务自动检测各渠道模型状态和延迟
-- **统一代理网关** — 兼容 OpenAI Chat / Claude Messages / Gemini / OpenAI Responses 四种 API 格式
-- **多密钥权限控制** — 可创建多个代理密钥，独立配置可访问的渠道和模型
-- **实时进度推送** — SSE + Redis Pub/Sub 实时展示检测进度
-- **WebDAV 同步** — 支持坚果云、NextCloud 等 WebDAV 服务备份渠道配置
-- **代理支持** — 全局 HTTP/HTTPS/SOCKS5 代理
-
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| 框架 | Next.js 16 (App Router) + React 19 |
-| 语言 | TypeScript |
-| 数据库 | PostgreSQL 16 (Prisma ORM v7) |
-| 缓存/队列 | Redis 7 (ioredis + BullMQ) |
-| UI | shadcn/ui + Tailwind CSS v4 |
-| 部署 | Docker + Docker Compose |
-| CI/CD | GitHub Actions → GHCR |
+- **多渠道管理** — 集中管理多个 AI API 渠道，支持导入/导出、批量操作、公开上传
+- **自动检测** — 定时检测所有渠道的模型可用性，支持 Cron 表达式自定义周期
+- **多端点支持** — 覆盖 OpenAI Chat、Claude Messages、Gemini、Codex/Responses、Image 五种 API 格式
+- **统一代理** — 一个入口转发所有渠道请求，兼容 `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1beta/models` 等接口
+- **智能路由** — 根据模型名自动匹配渠道，支持渠道前缀精确指定，多密钥轮询/随机负载均衡
+- **多密钥权限** — 创建多个代理密钥，细粒度控制可访问的渠道和模型
+- **实时监控** — SSE 实时推送检测进度，仪表盘展示健康率和历史热力图
+- **模型同步** — 自动从渠道 `/v1/models` 获取模型列表，支持关键词过滤
+- **WebDAV 同步** — 支持坚果云、NextCloud 等，多设备同步渠道配置
+- **代理支持** — 全局/渠道级 HTTP/HTTPS/SOCKS5 代理
+- **暗色主题** — 支持亮色/暗色切换
 
 ## 快速开始
 
-### 一键部署（推荐）
+### Docker 一键部署（推荐）
 
 ```bash
-# 下载部署脚本
-curl -fsSL https://raw.githubusercontent.com/chxcodepro/model-check/master/deploy.sh -o deploy.sh
-
-# 添加执行权限
-chmod +x deploy.sh
-
-# 全本地模式部署（PostgreSQL + Redis 本地运行）
-./deploy.sh --local
-```
-
-部署脚本会自动安装 Docker（如未安装）、引导配置环境变量、启动服务并初始化数据库。
-
-### 部署模式
-
-| 选项 | 说明 |
-|------|------|
-| `--local` | 全本地模式，PostgreSQL + Redis 均在本地 Docker 运行 |
-| `--cloud-db` | 云数据库模式，仅本地运行 Redis（数据库使用 Supabase/Neon 等） |
-| `--cloud-redis` | 云 Redis 模式，仅本地运行 PostgreSQL（Redis 使用 Upstash 等） |
-| `--cloud` | 全云端模式，不启动本地数据库服务 |
-
-其他选项：
-
-| 选项 | 说明 |
-|------|------|
-| `--quick` | 快速模式，跳过可选配置 |
-| `--rebuild` | 强制重新构建镜像 |
-| `--update` | 更新部署（拉取最新镜像并重启） |
-| `--status` | 查看服务运行状态 |
-| `--help` | 显示帮助信息 |
-
-### 手动部署
-
-```bash
-# 克隆仓库
+# 克隆项目
 git clone https://github.com/chxcodepro/model-check.git
 cd model-check
 
+# 一键部署（全本地模式，自带 PostgreSQL + Redis）
+bash deploy.sh --local
+```
+
+部署脚本支持多种模式：
+
+| 命令 | 说明 |
+|------|------|
+| `bash deploy.sh --local` | 全本地模式 — PostgreSQL + Redis 本地运行 |
+| `bash deploy.sh --cloud-db` | 云数据库模式 — 使用 Supabase/Neon，本地 Redis |
+| `bash deploy.sh --cloud-redis` | 云 Redis 模式 — 本地 PostgreSQL，使用 Upstash |
+| `bash deploy.sh --cloud` | 全云端模式 — 数据库和 Redis 均使用云服务 |
+| `bash deploy.sh --quick` | 快速模式 — 跳过可选配置 |
+| `bash deploy.sh --update` | 更新部署 — 拉取最新代码/镜像并迁移数据库 |
+| `bash deploy.sh --status` | 查看服务运行状态 |
+
+### Docker Compose 手动部署
+
+```bash
 # 复制并编辑环境变量
 cp .env.example .env
 # 编辑 .env，至少修改 ADMIN_PASSWORD 和 JWT_SECRET
 
 # 启动服务
 docker compose up -d
+
+# 查看日志
+docker logs -f model-check
 ```
+
+### 本地开发
+
+```bash
+# 安装依赖
+npm install
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env，配置 DATABASE_URL 和 REDIS_URL
+
+# 同步数据库
+npx prisma db push
+
+# 启动开发服务器
+npm run dev
+```
+
+访问 `http://localhost:3000`，使用 `ADMIN_PASSWORD` 登录管理面板。
 
 ## 环境变量
 
@@ -88,153 +83,144 @@ docker compose up -d
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `ADMIN_PASSWORD` | 管理员登录密码 | `change-this-password` |
-| `JWT_SECRET` | JWT 签名密钥（不设置则每次重启会话失效） | `change-this-secret-key` |
-
-### 部署模式
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `COMPOSE_PROFILES` | `local` / `db` / `redis` / 不设置 | `local` |
-
-### 数据库连接
-
-| 变量 | 说明 |
-|------|------|
-| `DATABASE_URL` | 本地开发用数据库连接 |
-| `DOCKER_DATABASE_URL` | Docker 容器内数据库连接（云数据库时设置） |
-| `REDIS_URL` | 本地开发用 Redis 连接 |
-| `DOCKER_REDIS_URL` | Docker 容器内 Redis 连接（云 Redis 时设置） |
+| `JWT_SECRET` | JWT 签名密钥，建议用 `openssl rand -base64 32` 生成 | `change-this-secret-key` |
+| `DATABASE_URL` | PostgreSQL 连接串 | 本地默认值 |
+| `REDIS_URL` | Redis 连接串 | `redis://localhost:6379` |
 
 ### 可选配置
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
+| `COMPOSE_PROFILES` | 部署模式：`local` / `redis` / `db` / 不设置 | `local` |
 | `AUTO_DETECT_ENABLED` | 启动时自动开始检测 | `false` |
-| `DETECT_PROMPT` | 检测使用的提示词 | `1+1=2? yes or no` |
-| `GLOBAL_PROXY` | 全局代理（HTTP/HTTPS/SOCKS5） | — |
-| `CRON_SCHEDULE` | 检测周期（cron 格式） | `0 0,8,12,16,20 * * *` |
+| `DETECT_PROMPT` | 检测用提示词 | `1+1=2? yes or no` |
+| `CRON_SCHEDULE` | 检测周期（Cron 表达式） | `0 0,8,12,16,20 * * *` |
 | `CRON_TIMEZONE` | 定时任务时区 | `Asia/Shanghai` |
-| `CHANNEL_CONCURRENCY` | 单渠道最大并发数 | `5` |
-| `MAX_GLOBAL_CONCURRENCY` | 全局最大并发数 | `30` |
-| `CLEANUP_SCHEDULE` | 日志清理周期 | `0 2 * * *` |
-| `LOG_RETENTION_DAYS` | 日志保留天数 | `7` |
-| `PROXY_API_KEY` | 代理接口密钥（不设置则自动生成） | — |
-
-### 端口映射
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `APP_PORT` | 应用端口 | `3000` |
-| `POSTGRES_PORT` | PostgreSQL 端口 | `5432` |
-| `REDIS_PORT` | Redis 端口 | `6379` |
+| `CHANNEL_CONCURRENCY` | 单渠道最大并发 | `5` |
+| `MAX_GLOBAL_CONCURRENCY` | 全局最大并发 | `30` |
+| `GLOBAL_PROXY` | 全局代理（HTTP/HTTPS/SOCKS5） | — |
+| `PROXY_API_KEY` | 代理接口固定密钥，不设置则自动生成 | — |
+| `LOG_RETENTION_DAYS` | 检测日志保留天数 | `7` |
 
 ### WebDAV 同步（可选）
 
 | 变量 | 说明 |
 |------|------|
 | `WEBDAV_URL` | WebDAV 服务器地址 |
-| `WEBDAV_USERNAME` | 用户名 |
-| `WEBDAV_PASSWORD` | 密码/应用密码 |
-| `WEBDAV_FILENAME` | 同步文件路径 |
+| `WEBDAV_USERNAME` | WebDAV 用户名 |
+| `WEBDAV_PASSWORD` | WebDAV 密码/应用密码 |
+| `WEBDAV_FILENAME` | 同步文件路径，默认 `channels.json` |
 
-> 坚果云用户需先在网页端创建同步文件夹，并使用应用密码而非登录密码。
+## API 代理使用
 
-## 代理网关
+部署后可作为统一 API 代理使用，兼容以下接口：
 
-应用内置统一代理网关，支持以下 API 格式：
+| 接口 | 方法 | 兼容 |
+|------|------|------|
+| `/v1/chat/completions` | POST | OpenAI Chat |
+| `/v1/messages` | POST | Anthropic Claude |
+| `/v1/responses` | POST | OpenAI Responses (GPT-5/Codex) |
+| `/v1/models` | GET | OpenAI Models |
+| `/v1beta/models/{model}:generateContent` | POST | Google Gemini |
+| `/v1beta/models/{model}:streamGenerateContent` | POST | Google Gemini Streaming |
 
-| 端点 | 兼容格式 |
-|------|----------|
-| `/v1/chat/completions` | OpenAI Chat Completions |
-| `/v1/messages` | Anthropic Claude Messages |
-| `/v1beta/models/{model}:generateContent` | Google Gemini |
-| `/v1/responses` | OpenAI Responses |
-| `/v1/models` | 模型列表 |
-
-使用方式：将 API Base URL 设置为 `http://<your-host>:<port>`，使用管理面板中创建的代理密钥作为 API Key。
-
-支持 `渠道名/模型名` 格式精确指定使用的渠道。
-
-## 本地开发
+### 示例
 
 ```bash
-# 安装依赖
-npm install
+# OpenAI 格式
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer your-proxy-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
 
-# 启动本地 PostgreSQL + Redis（需要 Docker）
-docker compose up postgres redis -d
+# 指定渠道（渠道名/模型名）
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer your-proxy-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-channel/gpt-4o",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
 
-# 推送数据库 schema
-npm run db:push
-
-# 启动开发服务器
-npm run dev
+# Claude 格式
+curl http://localhost:3000/v1/messages \
+  -H "x-api-key: your-proxy-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
 ```
 
-### 数据库更新
+完整文档请访问部署后的 `/docs/proxy` 页面。
 
-当 `prisma/schema.prisma` 有变更时，需要同步到数据库：
+## 版本更新
+
+新版本可能包含数据库字段变更。一条命令完成更新（拉取代码 + 镜像 + 自动迁移数据库）：
 
 ```bash
-# 开发环境：直接推送 schema 变更（不会删除已有数据，仅添加新表/字段）
-npm run db:push
-
-# 如果 DATABASE_URL 指向 Docker 内部地址（如 postgres:5432），本地执行时需要临时指定 localhost：
-# Windows PowerShell
-$env:DATABASE_URL="postgresql://modelcheck:modelcheck123456@localhost:5432/model_check"; npx prisma db push
-
-# Linux / macOS
-DATABASE_URL="postgresql://modelcheck:modelcheck123456@localhost:5432/model_check" npx prisma db push
+bash deploy.sh --update
 ```
 
-> **Docker 部署用户**：容器启动时会自动执行 `prisma db push`，无需手动操作。更新镜像后重启容器即可。
+脚本会自动执行：拉取最新代码 → 拉取最新镜像 → 重启服务 → 同步数据库结构（优先 Prisma，失败时使用幂等 SQL 兜底）。
 
-### 常用命令
+<details>
+<summary>手动更新 / 迁移失败排查</summary>
 
-| 命令 | 说明 |
+```bash
+# 手动更新完整流程
+git pull
+docker compose pull app && docker compose up -d
+docker compose exec -T app node node_modules/prisma/build/index.js db push --schema prisma/schema.prisma
+```
+
+如果 Prisma 迁移失败，可直接执行幂等 SQL 脚本（重复执行安全，不会破坏数据）：
+
+```bash
+# Docker 本地数据库
+docker compose exec -T postgres psql -U modelcheck -d model_check < prisma/init.postgresql.sql
+
+# 云数据库
+psql "$DATABASE_URL" < prisma/init.postgresql.sql
+```
+
+</details>
+
+## 技术栈
+
+| 层级 | 技术 |
 |------|------|
-| `npm run dev` | 启动开发服务器 |
-| `npm run build` | 生产构建 |
-| `npm run start` | 启动生产服务器 |
-| `npm run lint` | ESLint 检查 |
-| `npm run test` | 运行测试（watch 模式） |
-| `npm run test:run` | 运行测试（单次） |
-| `npm run db:generate` | 生成 Prisma 客户端 |
-| `npm run db:push` | 推送 Schema 到数据库 |
-| `npm run db:seed` | 运行数据库种子脚本 |
-| `npm run db:studio` | 启动 Prisma Studio |
-| `npm run test:connections` | 测试数据库/Redis 连接 |
+| 前端 | Next.js 16、React 19、TypeScript、Tailwind CSS 4 |
+| 后端 | Next.js App Router API Routes |
+| 数据库 | PostgreSQL 16 + Prisma 7 |
+| 队列 | Redis 7 + BullMQ |
+| 定时任务 | cron |
+| 认证 | JWT + bcryptjs |
+| 部署 | Docker + Docker Compose |
 
-## 项目结构
+## 常用命令
 
-```
-model-check/
-├── src/
-│   ├── app/
-│   │   ├── api/              # 后端 API 路由
-│   │   ├── v1/               # 代理网关端点（OpenAI/Claude）
-│   │   ├── v1beta/           # 代理网关端点（Gemini）
-│   │   ├── docs/             # 代理 API 文档页面
-│   │   └── page.tsx          # Dashboard 主页面
-│   ├── components/           # React 组件
-│   ├── hooks/                # React Hooks
-│   └── lib/
-│       ├── detection/        # 检测引擎
-│       ├── proxy/            # 代理网关核心逻辑
-│       ├── queue/            # BullMQ 任务队列
-│       ├── scheduler/        # Cron 定时任务
-│       ├── webdav/           # WebDAV 同步
-│       ├── prisma.ts         # 数据库客户端
-│       └── redis.ts          # Redis 客户端
-├── prisma/
-│   ├── schema.prisma         # 数据模型定义
-│   └── init.postgresql.sql   # 数据库初始化 SQL
-├── deploy.sh                 # 一键部署脚本
-├── docker-compose.yml        # Docker Compose 编排
-├── Dockerfile                # 多阶段 Docker 构建
-└── .env.example              # 环境变量模板
+```bash
+# 查看日志
+docker logs -f model-check
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+
+# 更新部署
+bash deploy.sh --update
+
+# 查看状态
+bash deploy.sh --status
 ```
 
-## License
+## 许可证
 
-MIT
+[MIT](LICENSE)
