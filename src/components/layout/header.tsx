@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useRef, FormEvent } from "react";
 import Link from "next/link";
-import { Sun, Moon, LogIn, LogOut, Activity, Play, Square, Loader2, Wifi, WifiOff, Clock, Zap, Timer, Search, Filter, X, Github, FileText, Settings, Upload } from "lucide-react";
+import { Sun, Moon, LogIn, LogOut, Activity, Play, Square, Loader2, Wifi, WifiOff, Clock, Zap, Timer, Search, Filter, X, Github, FileText, Settings, Upload, ArrowUpCircle } from "lucide-react";
 import { useTheme } from "@/components/providers/theme-provider";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useToast } from "@/components/ui/toast";
@@ -91,6 +91,8 @@ export function Header({
     apiKey: "",
   });
   const filterRef = useRef<HTMLDivElement>(null);
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [hasUpdate, setHasUpdate] = useState(false);
 
   // Close filter panel when clicking outside
   useEffect(() => {
@@ -134,6 +136,32 @@ export function Header({
       clearInterval(interval);
     };
   }, []);
+
+  // Check version update (admin only, on login)
+  useEffect(() => {
+    if (!isAuthenticated || !token) {
+      setHasUpdate(false);
+      setLatestVersion(null);
+      return;
+    }
+
+    const checkVersion = async () => {
+      try {
+        const res = await fetch("/api/version", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setHasUpdate(data.hasUpdate ?? false);
+          setLatestVersion(data.latest ?? null);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    checkVersion();
+  }, [isAuthenticated, token]);
 
   // Real-time countdown timer
   useEffect(() => {
@@ -325,6 +353,19 @@ export function Header({
           >
             <Github className="h-4 w-4" />
           </a>
+          {/* Version update badge (admin only) */}
+          {isAuthenticated && hasUpdate && latestVersion && (
+            <a
+              href="https://github.com/chxcodepro/model-check"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25 hover:bg-blue-500/25 transition-colors"
+              title={`当前 v${process.env.APP_VERSION}，最新 v${latestVersion}，点击查看`}
+            >
+              <ArrowUpCircle className="h-3 w-3" />
+              <span className="hidden sm:inline">v{latestVersion}</span>
+            </a>
+          )}
         </div>
 
         {/* Scheduler Info - clickable group */}

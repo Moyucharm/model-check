@@ -268,6 +268,7 @@ export default function Home() {
             模型检测
           </a>
           {" - API 渠道可用性检测系统"}
+          <span className="ml-2 text-xs text-muted-foreground/60">v{process.env.APP_VERSION}</span>
         </div>
       </footer>
 
