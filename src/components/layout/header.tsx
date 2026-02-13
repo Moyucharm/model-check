@@ -344,26 +344,26 @@ export function Header({
           >
             <FileText className="h-4 w-4" />
           </Link>
-          <a
-            href="https://github.com/chxcodepro/model-check"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors hidden sm:block"
-            title="GitHub 仓库"
-          >
-            <Github className="h-4 w-4" />
-          </a>
-          {/* Version update badge (admin only) */}
-          {isAuthenticated && hasUpdate && latestVersion && (
+          {isAuthenticated && hasUpdate && latestVersion ? (
             <a
               href="https://github.com/chxcodepro/model-check"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25 hover:bg-blue-500/25 transition-colors"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25 hover:bg-blue-500/25 transition-colors hidden sm:flex"
               title={`当前 v${process.env.APP_VERSION}，最新 v${latestVersion}，点击查看`}
             >
               <ArrowUpCircle className="h-3 w-3" />
-              <span className="hidden sm:inline">v{latestVersion}</span>
+              v{latestVersion}
+            </a>
+          ) : (
+            <a
+              href="https://github.com/chxcodepro/model-check"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors hidden sm:block"
+              title="GitHub 仓库"
+            >
+              <Github className="h-4 w-4" />
             </a>
           )}
         </div>
