@@ -101,7 +101,6 @@ export async function triggerFullDetection(): Promise<{
   modelCount: number;
   jobCount: number;
   jobIds: string[];
-  syncResults?: { channelId: string; added: number; total: number }[];
 }> {
 
   // Clear stopped flag from previous detection stop
@@ -634,7 +633,6 @@ export async function triggerSelectiveDetection(
   modelCount: number;
   jobCount: number;
   jobIds: string[];
-  syncResults?: { channelId: string; added: number; total: number }[];
 }> {
 
   // Clear stopped flag from previous detection stop

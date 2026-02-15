@@ -201,25 +201,17 @@ async function runDetectionOnce(): Promise<void> {
       return;
     }
 
-    let result;
-
     if (currentConfig.detectAllChannels) {
       // Full detection - all channels
-      result = await triggerFullDetection();
+      await triggerFullDetection();
     } else {
       // Selective detection - only specified channels/models
-      result = await triggerSelectiveDetection(
+      await triggerSelectiveDetection(
         currentConfig.selectedChannelIds,
         currentConfig.selectedModelIds
       );
     }
-
-    if (result.syncResults) {
-      const totalAdded = result.syncResults.reduce((sum, r) => sum + r.added, 0);
-      if (totalAdded > 0) {
-      }
-    }
-  } catch (error) {
+  } catch {
   }
 }
 
@@ -358,8 +350,8 @@ export function startCleanupCron(): CronJob {
     ENV_CLEANUP_SCHEDULE,
     async () => {
       try {
-        const result = await cleanupOldLogs();
-      } catch (error) {
+        await cleanupOldLogs();
+      } catch {
       }
     },
     null, // onComplete
