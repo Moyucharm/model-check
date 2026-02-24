@@ -1,7 +1,7 @@
 # ========================================
 # Stage 1: Dependencies
 # ========================================
-# https://github.com/chxcodepro/model-check
+# https://github.com/Moyucharm/model-check
 # Prisma 7 requires Node.js 22.12.0+ or 20.19.0+
 FROM docker.m.daocloud.io/library/node:22-alpine AS deps
 WORKDIR /app
@@ -28,7 +28,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Set dummy DATABASE_URL for Prisma generate (no actual connection needed)
-ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
+ENV DATABASE_URL="file:/tmp/model-check.db"
 
 # Generate Prisma client with index.ts
 RUN npm run db:generate

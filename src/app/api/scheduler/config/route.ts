@@ -9,7 +9,7 @@ import { reloadWorkerConfig } from "@/lib/queue/worker";
 // Default configuration values (from environment variables)
 const DEFAULT_CONFIG = {
   enabled: process.env.AUTO_DETECT_ENABLED !== "false",
-  cronSchedule: process.env.CRON_SCHEDULE || "0 0,8,12,16,20 * * *",
+  cronSchedule: process.env.CRON_SCHEDULE || "0 * * * *",
   timezone: process.env.CRON_TIMEZONE || "Asia/Shanghai",
   channelConcurrency: parseInt(process.env.CHANNEL_CONCURRENCY || "5", 10),
   maxGlobalConcurrency: parseInt(process.env.MAX_GLOBAL_CONCURRENCY || "30", 10),
@@ -120,7 +120,6 @@ export async function GET(request: NextRequest) {
             id: true,
             modelName: true,
             lastStatus: true,
-            detectedEndpoints: true,
           },
           orderBy: { modelName: "asc" },
         },

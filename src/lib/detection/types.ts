@@ -49,7 +49,7 @@ export interface ChannelWithModels {
   models: {
     id: string;
     modelName: string;
-    detectedEndpoints: string[];
+    channelKeyId?: string | null;
   }[];
 }
 

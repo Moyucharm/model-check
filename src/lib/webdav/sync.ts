@@ -15,7 +15,6 @@ interface ChannelData {
   proxy?: string | null;
   enabled?: boolean;
   keyMode?: string;
-  routeStrategy?: string;
   channelKeys?: { apiKey: string; name: string | null }[];
 }
 
@@ -24,7 +23,6 @@ interface WebDAVExportData {
   exportedAt: string;
   channels: ChannelData[];
   schedulerConfig?: Record<string, unknown>;
-  proxyKeys?: Array<Record<string, unknown>>;
 }
 
 // Get WebDAV config from environment variables
@@ -199,7 +197,6 @@ export async function appendChannelToWebDAV(channel: ChannelData): Promise<void>
       proxy: channel.proxy || null,
       enabled: channel.enabled ?? true,
       ...(channel.keyMode && { keyMode: channel.keyMode }),
-      ...(channel.routeStrategy && { routeStrategy: channel.routeStrategy }),
       ...(channel.channelKeys?.length && { channelKeys: channel.channelKeys }),
     };
   } else {
@@ -214,7 +211,6 @@ export async function appendChannelToWebDAV(channel: ChannelData): Promise<void>
       proxy: channel.proxy || null,
       enabled: channel.enabled ?? true,
       ...(channel.keyMode && { keyMode: channel.keyMode }),
-      ...(channel.routeStrategy && { routeStrategy: channel.routeStrategy }),
       ...(channel.channelKeys?.length && { channelKeys: channel.channelKeys }),
     });
   }
@@ -304,7 +300,6 @@ export async function updateChannelInWebDAV(channel: ChannelData): Promise<void>
       proxy: channel.proxy || null,
       enabled: channel.enabled ?? true,
       ...(channel.keyMode && { keyMode: channel.keyMode }),
-      ...(channel.routeStrategy && { routeStrategy: channel.routeStrategy }),
       ...(channel.channelKeys?.length && { channelKeys: channel.channelKeys }),
     };
   } else {
@@ -319,7 +314,6 @@ export async function updateChannelInWebDAV(channel: ChannelData): Promise<void>
       proxy: channel.proxy || null,
       enabled: channel.enabled ?? true,
       ...(channel.keyMode && { keyMode: channel.keyMode }),
-      ...(channel.routeStrategy && { routeStrategy: channel.routeStrategy }),
       ...(channel.channelKeys?.length && { channelKeys: channel.channelKeys }),
     });
   }
@@ -342,7 +336,7 @@ export async function syncAllChannelsToWebDAV(channels: ChannelData[]): Promise<
     return;
   }
 
-  // Read existing remote data to preserve schedulerConfig and proxyKeys
+  // Read existing remote data to preserve schedulerConfig.
   const remoteData = await readRemoteData(config);
   const baseData: WebDAVExportData = remoteData || {
     version: "2.0",
@@ -358,7 +352,6 @@ export async function syncAllChannelsToWebDAV(channels: ChannelData[]): Promise<
     proxy: ch.proxy || null,
     enabled: ch.enabled ?? true,
     ...(ch.keyMode && { keyMode: ch.keyMode }),
-    ...(ch.routeStrategy && { routeStrategy: ch.routeStrategy }),
     ...(ch.channelKeys?.length && { channelKeys: ch.channelKeys }),
   }));
   baseData.exportedAt = new Date().toISOString();

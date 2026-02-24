@@ -1,8 +1,8 @@
-// Summary stats component
+﻿// Summary stats component
 
 "use client";
 
-import { Activity, Server, CheckCircle, AlertCircle } from "lucide-react";
+import { Activity, Server, CheckCircle, AlertTriangle, Percent } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SummaryProps {
@@ -10,6 +10,7 @@ interface SummaryProps {
     totalChannels: number;
     totalModels: number;
     healthyModels: number;
+    partialModels?: number;
     healthRate: number;
   };
   className?: string;
@@ -18,33 +19,39 @@ interface SummaryProps {
 export function Summary({ data, className }: SummaryProps) {
   const stats = [
     {
-      label: "渠道",
+      label: "Channels",
       value: data.totalChannels,
       icon: Server,
       color: "text-blue-500",
     },
     {
-      label: "模型",
+      label: "Models",
       value: data.totalModels,
       icon: Activity,
-      color: "text-purple-500",
+      color: "text-violet-500",
     },
     {
-      label: "健康",
+      label: "Healthy",
       value: data.healthyModels,
       icon: CheckCircle,
-      color: "text-green-500",
+      color: "text-emerald-500",
     },
     {
-      label: "健康率",
+      label: "Partial",
+      value: data.partialModels ?? 0,
+      icon: AlertTriangle,
+      color: "text-amber-500",
+    },
+    {
+      label: "Health Rate",
       value: `${data.healthRate}%`,
-      icon: AlertCircle,
-      color: data.healthRate >= 80 ? "text-green-500" : data.healthRate >= 50 ? "text-yellow-500" : "text-red-500",
+      icon: Percent,
+      color: data.healthRate >= 80 ? "text-emerald-500" : data.healthRate >= 50 ? "text-amber-500" : "text-rose-500",
     },
   ];
 
   return (
-    <div className={cn("grid grid-cols-2 sm:grid-cols-4 gap-4", className)}>
+    <div className={cn("grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4", className)}>
       {stats.map((stat) => (
         <div
           key={stat.label}

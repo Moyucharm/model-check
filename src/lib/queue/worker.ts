@@ -1,16 +1,25 @@
-// BullMQ Worker for processing detection jobs
+﻿// Detection worker for Redis(BullMQ) and in-memory queue modes.
 
 import { Worker, Job } from "bullmq";
-import redis from "@/lib/redis";
 import prisma from "@/lib/prisma";
+import { createRedisDuplicate, getRedisClient, isRedisConfigured } from "@/lib/redis";
 import { executeDetection, sleep, randomDelay } from "@/lib/detection/detector";
+import { persistDetectionResult } from "@/lib/detection/model-state";
 import type { DetectionJobData, DetectionResult } from "@/lib/detection/types";
-import { DETECTION_QUEUE_NAME, PROGRESS_CHANNEL } from "./constants";
+import { DETECTION_QUEUE_NAME } from "./constants";
+import {
+  isDetectionStopped,
+  pullNextMemoryJob,
+  completeMemoryJob,
+  hasPendingMemoryJobs,
+  hasPendingJobsForModel,
+} from "./queue";
+import { publishProgress } from "./progress-bus";
 
 // Worker configuration (from environment variables)
-const WORKER_CONCURRENCY = 50; // BullMQ worker pool size (should be >= MAX_GLOBAL_CONCURRENCY)
-const SEMAPHORE_POLL_MS = 500; // Poll interval when waiting for slot
-const SEMAPHORE_TTL = 120; // TTL in seconds for semaphore keys (auto-cleanup)
+const WORKER_CONCURRENCY = 50;
+const SEMAPHORE_POLL_MS = 500;
+const SEMAPHORE_TTL = 120;
 const CONFIG_CACHE_TTL_MS = 5000;
 
 interface WorkerRuntimeConfig {
@@ -34,8 +43,12 @@ let loadingConfigPromise: Promise<WorkerRuntimeConfig> | null = null;
 // Redis keys
 const GLOBAL_SEMAPHORE_KEY = "detection:semaphore:global";
 
-// Worker instance
+// Worker instances
 let worker: Worker<DetectionJobData, DetectionResult> | null = null;
+let memoryWorkerRunning = false;
+let memoryTickTimer: NodeJS.Timeout | null = null;
+const memoryRunningJobs = new Set<string>();
+const memoryChannelActiveCounts = new Map<string, number>();
 
 function parsePositiveInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -111,19 +124,19 @@ export function reloadWorkerConfig(): void {
   cachedAt = 0;
 }
 
-/**
- * Redis-based semaphore for concurrency control
- */
 function channelSemaphoreKey(channelId: string): string {
   return `detection:semaphore:channel:${channelId}`;
 }
 
 async function acquireSlots(channelId: string, config: WorkerRuntimeConfig): Promise<void> {
+  if (!isRedisConfigured) {
+    return;
+  }
+
+  const redis = getRedisClient();
   const channelKey = channelSemaphoreKey(channelId);
 
-  // Must acquire both global and channel slots
   while (true) {
-    // Try global slot first
     const globalCount = await redis.incr(GLOBAL_SEMAPHORE_KEY);
     if (globalCount > config.maxGlobalConcurrency) {
       await redis.decr(GLOBAL_SEMAPHORE_KEY);
@@ -132,10 +145,8 @@ async function acquireSlots(channelId: string, config: WorkerRuntimeConfig): Pro
     }
     await redis.expire(GLOBAL_SEMAPHORE_KEY, SEMAPHORE_TTL);
 
-    // Try channel slot
     const channelCount = await redis.incr(channelKey);
     if (channelCount > config.channelConcurrency) {
-      // Release channel slot and global slot, then wait
       await redis.decr(channelKey);
       await redis.decr(GLOBAL_SEMAPHORE_KEY);
       await sleep(SEMAPHORE_POLL_MS);
@@ -143,27 +154,26 @@ async function acquireSlots(channelId: string, config: WorkerRuntimeConfig): Pro
     }
     await redis.expire(channelKey, SEMAPHORE_TTL);
 
-    // Got both slots
     return;
   }
 }
 
 async function releaseSlots(channelId: string): Promise<void> {
+  if (!isRedisConfigured) {
+    return;
+  }
+
+  const redis = getRedisClient();
   const channelKey = channelSemaphoreKey(channelId);
 
-  // Release both slots with minimum value protection
-  // Use pipeline for atomic execution
   const pipeline = redis.pipeline();
   pipeline.decr(channelKey);
   pipeline.decr(GLOBAL_SEMAPHORE_KEY);
   const results = await pipeline.exec();
 
-  // Check results and ensure counters don't go negative
   const channelVal = (results?.[0]?.[1] as number) ?? 0;
   const globalVal = (results?.[1]?.[1] as number) ?? 0;
 
-  // Clean up or reset if counters are at or below 0
-  // This prevents negative values from accumulating if queue was forcibly cleared
   if (channelVal <= 0) {
     await redis.del(channelKey);
   }
@@ -172,110 +182,44 @@ async function releaseSlots(channelId: string): Promise<void> {
   }
 }
 
-/**
- * Process a single detection job
- */
-async function processDetectionJob(
-  job: Job<DetectionJobData, DetectionResult>
+function buildStoppedResult(data: DetectionJobData): DetectionResult {
+  return {
+    status: "FAIL",
+    latency: 0,
+    endpointType: data.endpointType,
+    errorMsg: "Detection stopped by user",
+  };
+}
+
+async function runDetectionPipeline(
+  data: DetectionJobData,
+  jobId?: string,
+  useRedisSemaphore: boolean = false
 ): Promise<DetectionResult> {
-  const { data } = job;
   const runtimeConfig = await loadWorkerConfig();
 
-  // Check if detection has been stopped before processing
-  const { isDetectionStopped } = await import("./queue");
   if (await isDetectionStopped()) {
-    return {
-      status: "FAIL",
-      latency: 0,
-      endpointType: data.endpointType,
-      errorMsg: "Detection stopped by user",
-    };
+    return buildStoppedResult(data);
   }
 
-  // Acquire concurrency slots (both global and per-channel)
-  await acquireSlots(data.channelId, runtimeConfig);
+  if (useRedisSemaphore) {
+    await acquireSlots(data.channelId, runtimeConfig);
+  }
 
   try {
-    // Check again after acquiring slot (in case stop was triggered during wait)
     if (await isDetectionStopped()) {
-      return {
-        status: "FAIL",
-        latency: 0,
-        endpointType: data.endpointType,
-        errorMsg: "Detection stopped by user",
-      };
+      return buildStoppedResult(data);
     }
 
-    // Anti-blocking delay (3-5 seconds random)
     const delay = randomDelay(runtimeConfig.minDelayMs, runtimeConfig.maxDelayMs);
     await sleep(delay);
 
-    // Execute the actual detection
     const result = await executeDetection(data);
+    await persistDetectionResult(data, result);
 
-    // Use atomic operations to avoid race conditions when updating detectedEndpoints
-    // Multiple detection jobs for the same model can run in parallel
-    await prisma.$transaction(async (tx) => {
-      if (result.status === "SUCCESS") {
-        // Atomically add endpoint to array if not already present (PostgreSQL array operation)
-        await tx.$executeRaw`
-          UPDATE "models"
-          SET "detected_endpoints" =
-            CASE
-              WHEN ${data.endpointType} = ANY("detected_endpoints") THEN "detected_endpoints"
-              ELSE COALESCE("detected_endpoints", ARRAY[]::text[]) || ARRAY[${data.endpointType}]
-            END,
-            "last_status" =
-              CASE
-                WHEN ${data.endpointType} = ANY("detected_endpoints") THEN array_length(COALESCE("detected_endpoints", ARRAY[]::text[]), 1) > 0
-                ELSE array_length(COALESCE("detected_endpoints", ARRAY[]::text[]) || ARRAY[${data.endpointType}], 1) > 0
-              END,
-            "last_latency" = ${result.latency},
-            "last_checked_at" = ${new Date()}
-          WHERE id = ${data.modelId}
-        `;
-      } else {
-        // Atomically remove endpoint from array (PostgreSQL array_remove)
-        await tx.$executeRaw`
-          UPDATE "models"
-          SET "detected_endpoints" = array_remove(COALESCE("detected_endpoints", ARRAY[]::text[]), ${data.endpointType}),
-            "last_status" = COALESCE(array_length(array_remove(COALESCE("detected_endpoints", ARRAY[]::text[]), ${data.endpointType}), 1), 0) > 0,
-            "last_latency" = ${result.latency},
-            "last_checked_at" = ${new Date()}
-          WHERE id = ${data.modelId}
-        `;
-      }
+    const isModelComplete = !(await hasPendingJobsForModel(data.modelId, jobId));
 
-      // Create check log entry
-      await tx.checkLog.create({
-        data: {
-          modelId: data.modelId,
-          endpointType: result.endpointType,
-          status: result.status,
-          latency: result.latency,
-          statusCode: result.statusCode,
-          errorMsg: result.errorMsg,
-          responseContent: result.responseContent,
-        },
-      });
-    });
-
-    // Check if this model has any remaining jobs (to determine if model detection is complete)
-    const queue = (await import("./queue")).getDetectionQueue();
-    const [waitingJobs, activeJobs, delayedJobs] = await Promise.all([
-      queue.getJobs(["waiting"], 0, 1000),
-      queue.getJobs(["active"], 0, 100),
-      queue.getJobs(["delayed"], 0, 1000),
-    ]);
-
-    // Count remaining jobs for this model (excluding the current job which is about to complete)
-    const remainingJobs = [...waitingJobs, ...activeJobs, ...delayedJobs].filter(
-      (j) => j.data?.modelId === data.modelId && j.id !== job.id
-    );
-    const isModelComplete = remainingJobs.length === 0;
-
-    // Publish progress update for SSE (with error handling to not affect detection result)
-    const progressData = {
+    await publishProgress({
       channelId: data.channelId,
       modelId: data.modelId,
       modelName: data.modelName,
@@ -283,53 +227,177 @@ async function processDetectionJob(
       status: result.status,
       latency: result.latency,
       timestamp: Date.now(),
-      isModelComplete, // true when all endpoints for this model are done
+      isModelComplete,
+    });
+
+    return result;
+  } catch (error) {
+    const failResult: DetectionResult = {
+      status: "FAIL",
+      latency: 0,
+      endpointType: data.endpointType,
+      errorMsg: error instanceof Error ? error.message : "Detection execution failed",
     };
 
     try {
-      await redis.publish(PROGRESS_CHANNEL, JSON.stringify(progressData));
-    } catch (publishError) {
-      // Redis publish failure should not affect the detection result
+      await persistDetectionResult(data, failResult);
+      const isModelComplete = !(await hasPendingJobsForModel(data.modelId, jobId));
+      await publishProgress({
+        channelId: data.channelId,
+        modelId: data.modelId,
+        modelName: data.modelName,
+        endpointType: data.endpointType,
+        status: failResult.status,
+        latency: failResult.latency,
+        timestamp: Date.now(),
+        isModelComplete,
+      });
+    } catch {
+      // Do not mask original failure
     }
 
-    return result;
+    return failResult;
   } finally {
-    // Always release slots, even on error
-    await releaseSlots(data.channelId);
+    if (useRedisSemaphore) {
+      await releaseSlots(data.channelId);
+    }
+  }
+}
+
+async function processRedisDetectionJob(
+  job: Job<DetectionJobData, DetectionResult>
+): Promise<DetectionResult> {
+  const jobId = job.id ? String(job.id) : undefined;
+  return runDetectionPipeline(job.data, jobId, true);
+}
+
+function getMemoryChannelActive(channelId: string): number {
+  return memoryChannelActiveCounts.get(channelId) || 0;
+}
+
+function increaseMemoryChannelActive(channelId: string): void {
+  const current = getMemoryChannelActive(channelId);
+  memoryChannelActiveCounts.set(channelId, current + 1);
+}
+
+function decreaseMemoryChannelActive(channelId: string): void {
+  const current = getMemoryChannelActive(channelId);
+  if (current <= 1) {
+    memoryChannelActiveCounts.delete(channelId);
+    return;
+  }
+  memoryChannelActiveCounts.set(channelId, current - 1);
+}
+
+function scheduleMemoryTick(delayMs: number): void {
+  if (!memoryWorkerRunning) return;
+
+  if (memoryTickTimer) {
+    clearTimeout(memoryTickTimer);
+  }
+
+  memoryTickTimer = setTimeout(() => {
+    void processMemoryQueue();
+  }, delayMs);
+}
+
+async function processMemoryQueue(): Promise<void> {
+  if (!memoryWorkerRunning) return;
+
+  const runtimeConfig = await loadWorkerConfig();
+  let launchedAnyJob = false;
+
+  while (memoryRunningJobs.size < runtimeConfig.maxGlobalConcurrency) {
+    const nextJob = pullNextMemoryJob((job) => {
+      const globalCanTake = memoryRunningJobs.size < runtimeConfig.maxGlobalConcurrency;
+      const channelCanTake = getMemoryChannelActive(job.channelId) < runtimeConfig.channelConcurrency;
+      return globalCanTake && channelCanTake;
+    });
+
+    if (!nextJob) {
+      break;
+    }
+
+    launchedAnyJob = true;
+    memoryRunningJobs.add(nextJob.id);
+    increaseMemoryChannelActive(nextJob.data.channelId);
+
+    void (async () => {
+      let success = false;
+      try {
+        const result = await runDetectionPipeline(nextJob.data, nextJob.id, false);
+        success = result.status === "SUCCESS";
+      } catch {
+        success = false;
+      } finally {
+        completeMemoryJob(nextJob.id, success);
+        memoryRunningJobs.delete(nextJob.id);
+        decreaseMemoryChannelActive(nextJob.data.channelId);
+
+        if (memoryWorkerRunning) {
+          scheduleMemoryTick(0);
+        }
+      }
+    })();
+  }
+
+  if (!memoryWorkerRunning) {
+    return;
+  }
+
+  const hasWork = hasPendingMemoryJobs() || memoryRunningJobs.size > 0;
+  if (hasWork) {
+    scheduleMemoryTick(launchedAnyJob ? 50 : 150);
+  } else {
+    scheduleMemoryTick(500);
+  }
+}
+
+function startMemoryWorker(): void {
+  if (memoryWorkerRunning) {
+    return;
+  }
+
+  memoryWorkerRunning = true;
+  scheduleMemoryTick(0);
+}
+
+async function stopMemoryWorker(): Promise<void> {
+  memoryWorkerRunning = false;
+
+  if (memoryTickTimer) {
+    clearTimeout(memoryTickTimer);
+    memoryTickTimer = null;
   }
 }
 
 /**
  * Start the detection worker
  */
-export function startWorker(): Worker<DetectionJobData, DetectionResult> {
-  if (worker) {
+export function startWorker(): Worker<DetectionJobData, DetectionResult> | null {
+  if (isRedisConfigured) {
+    if (worker) {
+      return worker;
+    }
+
+    worker = new Worker<DetectionJobData, DetectionResult>(
+      DETECTION_QUEUE_NAME,
+      processRedisDetectionJob,
+      {
+        connection: createRedisDuplicate("redis:worker"),
+        concurrency: WORKER_CONCURRENCY,
+      }
+    );
+
+    worker.on("error", () => {
+      // Keep runtime stable; queue retries handle failures.
+    });
+
     return worker;
   }
 
-  worker = new Worker<DetectionJobData, DetectionResult>(
-    DETECTION_QUEUE_NAME,
-    processDetectionJob,
-    {
-      connection: redis.duplicate(),
-      concurrency: WORKER_CONCURRENCY,
-    }
-  );
-
-  // Event handlers
-  worker.on("completed", (job, result) => {
-  });
-
-  worker.on("failed", (job, error) => {
-  });
-
-  worker.on("error", (error) => {
-  });
-
-  worker.on("stalled", (jobId) => {
-  });
-
-  return worker;
+  startMemoryWorker();
+  return null;
 }
 
 /**
@@ -340,11 +408,14 @@ export async function stopWorker(): Promise<void> {
     await worker.close();
     worker = null;
   }
+
+  await stopMemoryWorker();
 }
 
 /**
  * Get worker status
  */
 export function isWorkerRunning(): boolean {
-  return worker !== null && !worker.closing;
+  const redisWorkerRunning = worker !== null && !worker.closing;
+  return redisWorkerRunning || memoryWorkerRunning;
 }

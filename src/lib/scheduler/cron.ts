@@ -7,7 +7,7 @@ import prisma from "@/lib/prisma";
 // Environment variable defaults
 const ENV_AUTO_DETECT_ENABLED = process.env.AUTO_DETECT_ENABLED !== "false";
 const ENV_AUTO_DETECT_ALL_CHANNELS = process.env.AUTO_DETECT_ALL_CHANNELS !== "false";
-const ENV_DETECTION_SCHEDULE = process.env.CRON_SCHEDULE || "0 0,8,12,16,20 * * *";
+const ENV_DETECTION_SCHEDULE = process.env.CRON_SCHEDULE || "0 * * * *";
 const ENV_CLEANUP_SCHEDULE = process.env.CLEANUP_SCHEDULE || "0 2 * * *";
 const ENV_CRON_TIMEZONE = process.env.CRON_TIMEZONE || "Asia/Shanghai";
 const ENV_LOG_RETENTION_DAYS = parseInt(process.env.LOG_RETENTION_DAYS || "7", 10);

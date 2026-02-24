@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/middleware/auth";
 
 const GITHUB_RAW_URL =
-  "https://raw.githubusercontent.com/chxcodepro/model-check/master/package.json";
+  "https://raw.githubusercontent.com/Moyucharm/model-check/main/package.json";
 
 // Cache remote version check result (1 hour)
 let cachedRemoteVersion: { version: string; checkedAt: number } | null = null;

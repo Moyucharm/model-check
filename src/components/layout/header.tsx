@@ -1,19 +1,39 @@
-// Header component with theme toggle, SSE status, scheduler info, filters, and login button
+﻿// Header component with theme toggle, scheduler info, filters and auth actions.
 
 "use client";
 
-import { useState, useEffect, useRef, FormEvent } from "react";
-import Link from "next/link";
-import { Sun, Moon, LogIn, LogOut, Activity, Play, Square, Loader2, Wifi, WifiOff, Clock, Zap, Timer, Search, Filter, X, Github, FileText, Settings, Upload, ArrowUpCircle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import {
+  Sun,
+  Moon,
+  LogIn,
+  LogOut,
+  Activity,
+  Play,
+  Square,
+  Loader2,
+  Wifi,
+  WifiOff,
+  Clock,
+  Zap,
+  Search,
+  Filter,
+  X,
+  Github,
+  Settings,
+  ArrowUpCircle,
+  List,
+  LayoutGrid,
+} from "lucide-react";
 import { useTheme } from "@/components/providers/theme-provider";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useToast } from "@/components/ui/toast";
 import { SchedulerModal } from "@/components/dashboard/scheduler-modal";
 import { cn } from "@/lib/utils";
+import type { ViewMode } from "@/components/dashboard/channel-card";
 
-// Filter types
-export type EndpointFilter = "all" | "CHAT" | "CLAUDE" | "GEMINI" | "CODEX";
-export type StatusFilter = "all" | "healthy" | "unhealthy" | "unknown";
+export type EndpointFilter = "all" | "CHAT" | "CLAUDE" | "GEMINI" | "CODEX" | "IMAGE";
+export type StatusFilter = "all" | "healthy" | "partial" | "unhealthy" | "unknown";
 
 interface SchedulerStatus {
   detection: {
@@ -36,32 +56,24 @@ interface SchedulerStatus {
   };
 }
 
-interface GuestUploadForm {
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-}
-
 interface HeaderProps {
   onLoginClick: () => void;
-  onGuestUploadSuccess?: () => void;
   isConnected?: boolean;
   isDetectionRunning?: boolean;
-  // Filter props
   search?: string;
   onSearchChange?: (value: string) => void;
   endpointFilter?: EndpointFilter;
   onEndpointFilterChange?: (value: EndpointFilter) => void;
   statusFilter?: StatusFilter;
   onStatusFilterChange?: (value: StatusFilter) => void;
-  // Detection callbacks
+  viewMode?: ViewMode;
+  onViewModeChange?: (value: ViewMode) => void;
   onDetectionStart?: () => void;
   onDetectionStop?: () => void;
 }
 
 export function Header({
   onLoginClick,
-  onGuestUploadSuccess,
   isConnected = false,
   isDetectionRunning = false,
   search = "",
@@ -70,12 +82,15 @@ export function Header({
   onEndpointFilterChange,
   statusFilter = "all",
   onStatusFilterChange,
+  viewMode = "list",
+  onViewModeChange,
   onDetectionStart,
   onDetectionStop,
 }: HeaderProps) {
   const { resolvedTheme, setTheme } = useTheme();
   const { isAuthenticated, token, logout } = useAuth();
   const { toast, update } = useToast();
+
   const [isDetecting, setIsDetecting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isHoveringStop, setIsHoveringStop] = useState(false);
@@ -83,18 +98,11 @@ export function Header({
   const [showFilters, setShowFilters] = useState(false);
   const [countdown, setCountdown] = useState<string>("-");
   const [showSchedulerModal, setShowSchedulerModal] = useState(false);
-  const [showGuestUploadModal, setShowGuestUploadModal] = useState(false);
-  const [guestUploading, setGuestUploading] = useState(false);
-  const [guestUploadForm, setGuestUploadForm] = useState<GuestUploadForm>({
-    name: "",
-    baseUrl: "",
-    apiKey: "",
-  });
-  const filterRef = useRef<HTMLDivElement>(null);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [hasUpdate, setHasUpdate] = useState(false);
 
-  // Close filter panel when clicking outside
+  const filterRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
@@ -108,7 +116,6 @@ export function Header({
     }
   }, [showFilters]);
 
-  // Fetch scheduler status
   const fetchSchedulerStatus = async () => {
     try {
       const response = await fetch("/api/scheduler");
@@ -116,28 +123,28 @@ export function Header({
         const data = await response.json();
         setSchedulerStatus(data);
       }
-    } catch (error) {
+    } catch {
+      // Ignore scheduler fetch errors.
     }
   };
 
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
-    const fetchStatus = async () => {
-      if (!isMounted) return;
+    const run = async () => {
+      if (!mounted) return;
       await fetchSchedulerStatus();
     };
 
-    fetchStatus();
-    // Refresh every minute
-    const interval = setInterval(fetchStatus, 60000);
+    run();
+    const interval = setInterval(run, 60000);
+
     return () => {
-      isMounted = false;
+      mounted = false;
       clearInterval(interval);
     };
   }, []);
 
-  // Check version update (admin only, on login)
   useEffect(() => {
     if (!isAuthenticated || !token) {
       setHasUpdate(false);
@@ -156,27 +163,26 @@ export function Header({
           setLatestVersion(data.latest ?? null);
         }
       } catch {
-        // ignore
+        // Ignore version check failures.
       }
     };
 
     checkVersion();
   }, [isAuthenticated, token]);
 
-  // Real-time countdown timer
   useEffect(() => {
-    if (!schedulerStatus?.detection.enabled || !schedulerStatus?.detection.nextRun) {
+    if (!schedulerStatus?.detection.enabled || !schedulerStatus.detection.nextRun) {
       setCountdown("-");
       return;
     }
 
     const updateCountdown = () => {
-      const nextRun = new Date(schedulerStatus.detection.nextRun!);
+      const nextRun = new Date(schedulerStatus.detection.nextRun as string);
       const now = new Date();
       const diffMs = nextRun.getTime() - now.getTime();
 
       if (diffMs <= 0) {
-        setCountdown("执行中...");
+        setCountdown("running...");
         return;
       }
 
@@ -186,9 +192,9 @@ export function Header({
       const secs = diffSecs % 60;
 
       if (hours > 0) {
-        setCountdown(`${hours}h${mins}m${secs}s`);
+        setCountdown(`${hours}h ${mins}m ${secs}s`);
       } else if (mins > 0) {
-        setCountdown(`${mins}m${secs}s`);
+        setCountdown(`${mins}m ${secs}s`);
       } else {
         setCountdown(`${secs}s`);
       }
@@ -204,12 +210,11 @@ export function Header({
   };
 
   const handleTriggerDetection = async () => {
-    if (isDetecting) return;
+    if (isDetecting || !token) return;
 
     setIsDetecting(true);
-    // Immediately notify parent that detection is starting
     onDetectionStart?.();
-    const toastId = toast("正在启动全量检测...", "loading");
+    const toastId = toast("Starting full detection...", "loading");
 
     try {
       const response = await fetch("/api/detect", {
@@ -221,18 +226,16 @@ export function Header({
         body: JSON.stringify({}),
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (response.ok) {
-        update(toastId, data.message || "检测已启动", "success");
+        update(toastId, data.message || "Detection started", "success");
       } else {
-        update(toastId, data.error || "启动检测失败", "error");
-        // If failed, notify parent to stop
+        update(toastId, data.error || "Failed to start detection", "error");
         onDetectionStop?.();
       }
     } catch {
-      update(toastId, "网络错误", "error");
-      // If failed, notify parent to stop
+      update(toastId, "Network error", "error");
       onDetectionStop?.();
     } finally {
       setIsDetecting(false);
@@ -240,10 +243,10 @@ export function Header({
   };
 
   const handleStopDetection = async () => {
-    if (isStopping) return;
+    if (isStopping || !token) return;
 
     setIsStopping(true);
-    const toastId = toast("正在停止检测...", "loading");
+    const toastId = toast("Stopping detection...", "loading");
 
     try {
       const response = await fetch("/api/detect", {
@@ -253,489 +256,289 @@ export function Header({
         },
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (response.ok) {
-        update(toastId, data.message || "检测已停止", "success");
-        // Notify parent that detection stopped
+        update(toastId, data.message || "Detection stopped", "success");
         onDetectionStop?.();
       } else {
-        update(toastId, data.error || "停止检测失败", "error");
+        update(toastId, data.error || "Failed to stop detection", "error");
       }
     } catch {
-      update(toastId, "网络错误", "error");
+      update(toastId, "Network error", "error");
     } finally {
       setIsStopping(false);
     }
   };
 
-  const handleGuestUpload = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (guestUploading) return;
-
-    setGuestUploading(true);
-
-    try {
-      const response = await fetch("/api/channel/public-upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(guestUploadForm),
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        const message = data?.code === "MODEL_FETCH_FAILED"
-          ? "请检查你的渠道是否可用"
-          : data?.error || "上传失败";
-        toast(message, "error");
-        return;
-      }
-
-      toast("上传成功，等待审核", "success");
-      onGuestUploadSuccess?.();
-      setShowGuestUploadModal(false);
-      setGuestUploadForm({
-        name: "",
-        baseUrl: "",
-        apiKey: "",
-      });
-    } catch {
-      const message = "上传失败，请稍后重试";
-      toast(message, "error");
-    } finally {
-      setGuestUploading(false);
-    }
-  };
-
-  // Format next run time
-  const formatNextRun = (isoString: string | null): string => {
-    if (!isoString) return "-";
-    const date = new Date(isoString);
-    const now = new Date();
-    const diffMs = date.getTime() - now.getTime();
-
-    if (diffMs < 0) return "即将执行";
-
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-
-    if (diffMins < 60) return `${diffMins}分钟后`;
-    if (diffHours < 24) return `${diffHours}h${diffMins % 60}m`;
-    return date.toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  };
-
-  // Check if any filter is active
-  const hasActiveFilters = search || endpointFilter !== "all" || statusFilter !== "all";
+  const hasActiveFilters = Boolean(search) || endpointFilter !== "all" || statusFilter !== "all";
   const activeFilterCount = [search, endpointFilter !== "all", statusFilter !== "all"].filter(Boolean).length;
 
   return (
     <>
       <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container mx-auto flex h-14 items-center justify-between px-2 sm:px-4 gap-1 sm:gap-2">
-        {/* Logo - compact on mobile */}
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-          <Activity className="h-5 w-5 text-primary" />
-          <span className="font-semibold hidden sm:inline">模型检测</span>
-          <Link
-            href="/docs/proxy"
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors hidden sm:block"
-            title="API 代理文档"
-          >
-            <FileText className="h-4 w-4" />
-          </Link>
-          {isAuthenticated && hasUpdate && latestVersion ? (
-            <a
-              href="https://github.com/chxcodepro/model-check"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25 hover:bg-blue-500/25 transition-colors hidden sm:flex"
-              title={`当前 v${process.env.APP_VERSION}，最新 v${latestVersion}，点击查看`}
-            >
-              <ArrowUpCircle className="h-3 w-3" />
-              v{latestVersion}
-            </a>
-          ) : (
-            <a
-              href="https://github.com/chxcodepro/model-check"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors hidden sm:block"
-              title="GitHub 仓库"
-            >
-              <Github className="h-4 w-4" />
-            </a>
-          )}
-        </div>
-
-        {/* Scheduler Info - clickable group */}
-        <button
-          type="button"
-          onClick={() => isAuthenticated && setShowSchedulerModal(true)}
-          className={cn(
-            "flex items-center gap-1 sm:gap-2 text-xs rounded-md border transition-colors",
-            schedulerStatus?.detection.enabled === false
-              ? "border-red-500/30 bg-red-500/10"
-              : "border-border bg-muted/50",
-            isAuthenticated && "hover:bg-accent hover:border-primary/50 cursor-pointer"
-          )}
-          title={isAuthenticated ? "点击配置定时检测" : "定时检测状态"}
-        >
-          {/* Next detection time */}
-          <div className={cn(
-            "flex items-center gap-1 px-2 py-1.5",
-            schedulerStatus?.detection.enabled === false ? "text-red-500" : "text-muted-foreground"
-          )}>
-            <Clock className={cn(
-              "h-3.5 w-3.5",
-              schedulerStatus?.detection.enabled === false ? "text-red-500" : "text-blue-500"
-            )} />
-            <span className="font-medium text-foreground text-[11px] sm:text-xs">
-              {schedulerStatus
-                ? schedulerStatus.detection.enabled
-                  ? countdown
-                  : "已禁用"
-                : "-"}
-            </span>
-          </div>
-
-          {/* Divider */}
-          <div className="hidden sm:block w-px h-4 bg-border" />
-
-          {/* Concurrency */}
-          <div className="hidden sm:flex items-center gap-1 px-2 py-1.5" title="并发数">
-            <Zap className="h-3.5 w-3.5 text-yellow-500" />
-            <span className="font-medium text-foreground text-xs">{schedulerStatus?.config.maxGlobalConcurrency ?? "-"}</span>
-          </div>
-
-          {/* Divider */}
-          <div className="hidden lg:block w-px h-4 bg-border" />
-
-          {/* Interval */}
-          <div className="hidden lg:flex items-center gap-1 px-2 py-1.5" title="检测间隔">
-            <Timer className="h-3.5 w-3.5 text-green-500" />
-            <span className="font-medium text-foreground text-xs">{schedulerStatus ? `${schedulerStatus.config.minDelayMs / 1000}-${schedulerStatus.config.maxDelayMs / 1000}s` : "-"}</span>
-          </div>
-
-          {/* Settings icon for authenticated users */}
-          {isAuthenticated && (
-            <div className="pr-2">
-              <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-            </div>
-          )}
-        </button>
-
-        {/* Actions - compact layout */}
-        <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-          {/* Filter Button with Dropdown */}
-          {onSearchChange && (
-            <div className="relative" ref={filterRef}>
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
-                  hasActiveFilters
-                    ? "bg-blue-500 text-white hover:bg-blue-600"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-                title="筛选"
+        <div className="container mx-auto flex h-14 items-center justify-between px-2 sm:px-4 gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            <Activity className="h-5 w-5 text-primary" />
+            <span className="font-semibold hidden sm:inline">Model Check</span>
+            {isAuthenticated && hasUpdate && latestVersion ? (
+              <a
+                href="https://github.com/Moyucharm/model-check"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25 hover:bg-blue-500/25 transition-colors hidden sm:flex"
+                title={`Current v${process.env.APP_VERSION}, latest v${latestVersion}`}
               >
-                <Filter className="h-4 w-4" />
-                <span className="hidden sm:inline">筛选</span>
-                {activeFilterCount > 0 && (
-                  <span className="ml-0.5 px-1 py-0.5 text-xs rounded-full bg-white/20">
-                    {activeFilterCount}
-                  </span>
-                )}
-              </button>
-
-              {/* Filter Dropdown Panel */}
-              {showFilters && (
-                <div className="absolute right-0 top-full mt-2 w-72 p-4 rounded-lg border border-border bg-card shadow-lg z-50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium">筛选条件</span>
-                    <button
-                      onClick={() => setShowFilters(false)}
-                      className="p-1 rounded hover:bg-accent"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {/* Search */}
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">搜索模型</label>
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <input
-                          type="text"
-                          value={search}
-                          onChange={(e) => onSearchChange(e.target.value)}
-                          placeholder="输入模型名称..."
-                          className="w-full pl-8 pr-3 py-2 rounded-md border border-input bg-background text-sm"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Endpoint Filter */}
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">端点类型</label>
-                      <select
-                        value={endpointFilter}
-                        onChange={(e) => onEndpointFilterChange?.(e.target.value as EndpointFilter)}
-                        className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-                      >
-                        <option value="all">所有端点</option>
-                        <option value="CHAT">Chat</option>
-                        <option value="CLAUDE">Claude CLI</option>
-                        <option value="GEMINI">Gemini CLI</option>
-                        <option value="CODEX">Codex CLI</option>
-                      </select>
-                    </div>
-
-                    {/* Status Filter */}
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">状态</label>
-                      <select
-                        value={statusFilter}
-                        onChange={(e) => onStatusFilterChange?.(e.target.value as StatusFilter)}
-                        className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-                      >
-                        <option value="all">所有状态</option>
-                        <option value="healthy">正常</option>
-                        <option value="unhealthy">异常</option>
-                        <option value="unknown">未检测</option>
-                      </select>
-                    </div>
-
-                    {/* Clear Filters */}
-                    {hasActiveFilters && (
-                      <button
-                        onClick={() => {
-                          onSearchChange("");
-                          onEndpointFilterChange?.("all");
-                          onStatusFilterChange?.("all");
-                        }}
-                        className="w-full py-2 text-sm text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
-                      >
-                        清除所有筛选
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* SSE Connection Status */}
-          <div className="flex items-center px-1 py-1 rounded-md text-sm" title={isConnected ? "实时连接已建立" : "连接断开"}>
-            {isConnected ? (
-              <Wifi className="h-4 w-4 text-green-500" />
+                <ArrowUpCircle className="h-3 w-3" />
+                v{latestVersion}
+              </a>
             ) : (
-              <WifiOff className="h-4 w-4 text-red-500" />
+              <a
+                href="https://github.com/Moyucharm/model-check"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors hidden sm:block"
+                title="GitHub"
+              >
+                <Github className="h-4 w-4" />
+              </a>
             )}
           </div>
 
-          {/* Trigger/Stop Detection (admin only) */}
-          {isAuthenticated && (
-            isDetectionRunning ? (
-              <button
-                onClick={handleStopDetection}
-                onMouseEnter={() => setIsHoveringStop(true)}
-                onMouseLeave={() => setIsHoveringStop(false)}
-                disabled={isStopping}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-                  isHoveringStop || isStopping
-                    ? "bg-red-500 text-white hover:bg-red-600"
-                    : "bg-blue-500 text-white"
-                )}
-                title={isHoveringStop ? "停止检测" : "检测进行中"}
-              >
-                {isStopping ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : isHoveringStop ? (
-                  <Square className="h-4 w-4" />
-                ) : (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                )}
-                <span className="hidden sm:inline">
-                  {isStopping ? "停止中" : isHoveringStop ? "停止" : "检测中"}
-                </span>
-              </button>
-            ) : (
-              <button
-                onClick={handleTriggerDetection}
-                disabled={isDetecting}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="开始全量检测"
-              >
-                {isDetecting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                <span className="hidden sm:inline">{isDetecting ? "启动中" : "检测"}</span>
-              </button>
-            )
-          )}
-
-          {/* Guest Upload (unauthenticated only) */}
-          {!isAuthenticated && (
-            <button
-              onClick={() => {
-                setShowGuestUploadModal(true);
-              }}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium border border-input bg-background hover:bg-accent transition-colors"
-              title="上传渠道"
-            >
-              <Upload className="h-4 w-4" />
-              <span className="hidden sm:inline">上传渠道</span>
-            </button>
-          )}
-
-          {/* Theme Toggle */}
           <button
-            onClick={toggleTheme}
-            className="inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            title={resolvedTheme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
+            type="button"
+            onClick={() => isAuthenticated && setShowSchedulerModal(true)}
+            className={cn(
+              "flex items-center gap-2 rounded-md border px-2 text-xs transition-colors",
+              schedulerStatus?.detection.enabled === false
+                ? "border-rose-500/30 bg-rose-500/10"
+                : "border-border bg-muted/50",
+              isAuthenticated && "hover:bg-accent hover:border-primary/50 cursor-pointer"
+            )}
+            title={isAuthenticated ? "Open scheduler settings" : "Scheduler status"}
           >
-            {resolvedTheme === "dark" ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
+            <span className="inline-flex items-center gap-1 py-1.5">
+              <Clock className={cn("h-3.5 w-3.5", schedulerStatus?.detection.enabled === false ? "text-rose-500" : "text-blue-500")} />
+              <span className="font-medium text-foreground text-xs">{schedulerStatus ? (schedulerStatus.detection.enabled ? countdown : "disabled") : "-"}</span>
+            </span>
+            <span className="hidden sm:inline-flex items-center gap-1 py-1.5" title="Global concurrency">
+              <Zap className="h-3.5 w-3.5 text-yellow-500" />
+              <span className="font-medium text-foreground text-xs">{schedulerStatus?.config.maxGlobalConcurrency ?? "-"}</span>
+            </span>
+            {isAuthenticated && (
+              <span className="pr-1">
+                <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+              </span>
             )}
           </button>
 
-          {/* Login/Logout */}
-          {isAuthenticated ? (
-            <button
-              onClick={logout}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">退出</span>
-            </button>
-          ) : (
-            <button
-              onClick={onLoginClick}
-              className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              <LogIn className="h-4 w-4" />
-              <span className="hidden sm:inline">登录</span>
-            </button>
-          )}
-        </div>
-      </div>
-    </header>
+          <div className="flex items-center gap-1 shrink-0">
+            {onSearchChange && (
+              <div className="relative" ref={filterRef}>
+                <button
+                  onClick={() => setShowFilters((v) => !v)}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
+                    hasActiveFilters
+                      ? "bg-blue-500 text-white hover:bg-blue-600"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  )}
+                  title="Filters"
+                >
+                  <Filter className="h-4 w-4" />
+                  <span className="hidden sm:inline">Filter</span>
+                  {activeFilterCount > 0 && (
+                    <span className="ml-0.5 px-1 py-0.5 text-xs rounded-full bg-white/20">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </button>
 
-    {/* Guest Upload Modal */}
-    {showGuestUploadModal && (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="guest-upload-modal-title"
-      >
-        <div
-          className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-          onClick={() => {
-            if (!guestUploading) {
-              setShowGuestUploadModal(false);
-            }
-          }}
-          aria-hidden="true"
-        />
-        <div className="relative w-full max-w-lg mx-4 bg-card rounded-lg shadow-lg border border-border max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between p-4 border-b border-border">
-            <h2 id="guest-upload-modal-title" className="text-lg font-semibold">上传渠道</h2>
+                {showFilters && (
+                  <div className="absolute right-0 top-full mt-2 w-72 p-4 rounded-lg border border-border bg-card shadow-lg z-50">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-medium">Filters</span>
+                      <button onClick={() => setShowFilters(false)} className="p-1 rounded hover:bg-accent">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Search model</label>
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <input
+                            type="text"
+                            value={search}
+                            onChange={(e) => onSearchChange(e.target.value)}
+                            placeholder="Type model name..."
+                            className="w-full pl-8 pr-3 py-2 rounded-md border border-input bg-background text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Endpoint</label>
+                        <select
+                          value={endpointFilter}
+                          onChange={(e) => onEndpointFilterChange?.(e.target.value as EndpointFilter)}
+                          className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+                        >
+                          <option value="all">All</option>
+                          <option value="CHAT">Chat</option>
+                          <option value="CLAUDE">Claude CLI</option>
+                          <option value="GEMINI">Gemini CLI</option>
+                          <option value="CODEX">Codex CLI</option>
+                          <option value="IMAGE">Image</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Status</label>
+                        <select
+                          value={statusFilter}
+                          onChange={(e) => onStatusFilterChange?.(e.target.value as StatusFilter)}
+                          className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+                        >
+                          <option value="all">All</option>
+                          <option value="healthy">Healthy</option>
+                          <option value="partial">Partial</option>
+                          <option value="unhealthy">Unhealthy</option>
+                          <option value="unknown">Unknown</option>
+                        </select>
+                      </div>
+
+                      {hasActiveFilters && (
+                        <button
+                          onClick={() => {
+                            onSearchChange("");
+                            onEndpointFilterChange?.("all");
+                            onStatusFilterChange?.("all");
+                          }}
+                          className="w-full py-2 text-sm text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
+                        >
+                          Clear all filters
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="inline-flex items-center rounded-md border border-border bg-background p-0.5" title="View mode">
+              <button
+                onClick={() => onViewModeChange?.("list")}
+                className={cn(
+                  "rounded px-1.5 py-1 text-xs transition-colors",
+                  viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                )}
+                title="List view"
+              >
+                <List className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => onViewModeChange?.("card")}
+                className={cn(
+                  "rounded px-1.5 py-1 text-xs transition-colors",
+                  viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                )}
+                title="Card view"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center px-1 py-1 rounded-md text-sm" title={isConnected ? "SSE connected" : "SSE disconnected"}>
+              {isConnected ? (
+                <Wifi className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <WifiOff className="h-4 w-4 text-rose-500" />
+              )}
+            </div>
+
+            {isAuthenticated && (
+              isDetectionRunning ? (
+                <button
+                  onClick={handleStopDetection}
+                  onMouseEnter={() => setIsHoveringStop(true)}
+                  onMouseLeave={() => setIsHoveringStop(false)}
+                  disabled={isStopping}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                    isHoveringStop || isStopping
+                      ? "bg-rose-500 text-white hover:bg-rose-600"
+                      : "bg-blue-500 text-white"
+                  )}
+                  title={isHoveringStop ? "Stop detection" : "Detection running"}
+                >
+                  {isStopping ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : isHoveringStop ? (
+                    <Square className="h-4 w-4" />
+                  ) : (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {isStopping ? "Stopping" : isHoveringStop ? "Stop" : "Running"}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleTriggerDetection}
+                  disabled={isDetecting}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Start full detection"
+                >
+                  {isDetecting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline">{isDetecting ? "Starting" : "Detect"}</span>
+                </button>
+              )
+            )}
+
             <button
-              onClick={() => setShowGuestUploadModal(false)}
-              disabled={guestUploading}
-              className="p-1 rounded-md hover:bg-accent transition-colors disabled:opacity-50"
-              aria-label="关闭"
+              onClick={toggleTheme}
+              className="inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              title={resolvedTheme === "dark" ? "Switch to light" : "Switch to dark"}
             >
-              <X className="h-5 w-5" />
+              {resolvedTheme === "dark" ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
             </button>
+
+            {isAuthenticated ? (
+              <button
+                onClick={logout}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Logout</span>
+              </button>
+            ) : (
+              <button
+                onClick={onLoginClick}
+                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                <LogIn className="h-4 w-4" />
+                <span className="hidden sm:inline">Login</span>
+              </button>
+            )}
           </div>
-
-          <form onSubmit={handleGuestUpload} className="p-4 space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                渠道名称 <span className="text-destructive">*</span>
-              </label>
-              <input
-                type="text"
-                value={guestUploadForm.name}
-                onChange={(e) => setGuestUploadForm((prev) => ({ ...prev, name: e.target.value }))}
-                className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                placeholder="例如：我的 OpenAI 渠道"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Base URL <span className="text-destructive">*</span>
-              </label>
-              <input
-                type="url"
-                value={guestUploadForm.baseUrl}
-                onChange={(e) => setGuestUploadForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
-                className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                placeholder="https://api.openai.com"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Key <span className="text-destructive">*</span>
-              </label>
-              <input
-                type="password"
-                value={guestUploadForm.apiKey}
-                onChange={(e) => setGuestUploadForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-                className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                placeholder="sk-..."
-                required
-              />
-            </div>
-
-            <div className="p-3 rounded-md bg-yellow-500/10 border border-yellow-500/20 text-sm text-yellow-700 dark:text-yellow-300">
-              请不要上传请求受限的渠道，防止渠道被封，本站概不负责。
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowGuestUploadModal(false)}
-                disabled={guestUploading}
-                className="px-4 py-2 rounded-md border border-input bg-background text-sm font-medium hover:bg-accent transition-colors disabled:opacity-50"
-              >
-                取消
-              </button>
-              <button
-                type="submit"
-                disabled={guestUploading}
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center gap-2"
-              >
-                {guestUploading && <Loader2 className="h-4 w-4 animate-spin" />}
-                上传
-              </button>
-            </div>
-          </form>
         </div>
-      </div>
-    )}
+      </header>
 
-    {/* Scheduler Modal - outside header to avoid sticky positioning issues */}
-    <SchedulerModal
-      isOpen={showSchedulerModal}
-      onClose={() => setShowSchedulerModal(false)}
-      onSave={fetchSchedulerStatus}
-    />
+      <SchedulerModal
+        isOpen={showSchedulerModal}
+        onClose={() => setShowSchedulerModal(false)}
+        onSave={fetchSchedulerStatus}
+      />
     </>
   );
 }

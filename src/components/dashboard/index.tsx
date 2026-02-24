@@ -1,12 +1,11 @@
-// Main dashboard component
+﻿// Main dashboard component
 
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Summary } from "@/components/dashboard/summary";
-import { ChannelCard } from "@/components/dashboard/channel-card";
+import { ChannelCard, type ViewMode } from "@/components/dashboard/channel-card";
 import { ChannelManager } from "@/components/dashboard/channel-manager";
-import { ProxyKeyManager } from "@/components/dashboard/proxy-key-manager";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useToast } from "@/components/ui/toast";
 import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
@@ -23,20 +22,31 @@ interface CheckLog {
   createdAt: string;
 }
 
+interface EndpointStatus {
+  endpointType: string;
+  status: "SUCCESS" | "FAIL";
+  latency: number | null;
+  statusCode: number | null;
+  errorMsg: string | null;
+  responseContent: string | null;
+  checkedAt: string;
+}
+
 interface Model {
   id: string;
   modelName: string;
-  detectedEndpoints: string[] | null;
+  healthStatus: "healthy" | "partial" | "unhealthy" | "unknown";
   lastStatus: boolean | null;
   lastLatency: number | null;
   lastCheckedAt: string | null;
+  endpointStatuses: EndpointStatus[];
   checkLogs: CheckLog[];
 }
 
 interface Channel {
   id: string;
   name: string;
-  type: string;
+  type?: string;
   models: Model[];
 }
 
@@ -53,23 +63,22 @@ interface DashboardData {
     totalChannels: number;
     totalModels: number;
     healthyModels: number;
+    partialModels?: number;
     healthRate: number;
   };
   pagination: Pagination;
   channels: Channel[];
 }
 
-// Filter types (exported for parent components)
-export type EndpointFilter = "all" | "CHAT" | "CLAUDE" | "GEMINI" | "CODEX";
-export type StatusFilter = "all" | "healthy" | "unhealthy" | "unknown";
+export type EndpointFilter = "all" | "CHAT" | "CLAUDE" | "GEMINI" | "CODEX" | "IMAGE";
+export type StatusFilter = "all" | "healthy" | "partial" | "unhealthy" | "unknown";
 
 interface DashboardProps {
   refreshKey?: number;
-  // Filter props from header
+  viewMode?: ViewMode;
   search?: string;
   endpointFilter?: EndpointFilter;
   statusFilter?: StatusFilter;
-  // Testing state from parent
   testingModelIds?: Set<string>;
   onTestModels?: (modelIds: string[]) => void;
   onStopModels?: (modelIds: string[]) => void;
@@ -77,8 +86,23 @@ interface DashboardProps {
 
 const PAGE_SIZE = 10;
 
+function modelSortWeight(status: Model["healthStatus"]): number {
+  switch (status) {
+    case "healthy":
+      return 0;
+    case "partial":
+      return 1;
+    case "unhealthy":
+      return 2;
+    case "unknown":
+    default:
+      return 3;
+  }
+}
+
 export function Dashboard({
   refreshKey = 0,
+  viewMode = "list",
   search = "",
   endpointFilter = "all",
   statusFilter = "all",
@@ -101,10 +125,10 @@ export function Dashboard({
     status: StatusFilter = "all"
   ) => {
     try {
-      const token = localStorage.getItem("auth_token");
+      const localToken = localStorage.getItem("auth_token");
       const headers: Record<string, string> = {};
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
+      if (localToken) {
+        headers.Authorization = `Bearer ${localToken}`;
       }
 
       const params = new URLSearchParams({
@@ -112,7 +136,6 @@ export function Dashboard({
         pageSize: String(PAGE_SIZE),
       });
 
-      // Add filter parameters to API request
       if (searchQuery) {
         params.set("search", searchQuery);
       }
@@ -125,22 +148,20 @@ export function Dashboard({
 
       const response = await fetch(`/api/dashboard?${params}`, { headers, signal });
       if (!response.ok) {
-        throw new Error("获取数据失败");
+        throw new Error("Failed to fetch dashboard data");
       }
 
       const result = await response.json();
-      // Only update state if request wasn't aborted
       if (!signal?.aborted) {
         setData(result);
         setError(null);
       }
     } catch (err) {
-      // Ignore abort errors
       if (err instanceof Error && err.name === "AbortError") {
         return;
       }
       if (!signal?.aborted) {
-        setError(err instanceof Error ? err.message : "未知错误");
+        setError(err instanceof Error ? err.message : "Unknown error");
       }
     } finally {
       if (!signal?.aborted) {
@@ -149,11 +170,10 @@ export function Dashboard({
     }
   }, []);
 
-  // Delete channel handler
   const handleDeleteChannel = useCallback(async (channelId: string) => {
     if (!token) return;
 
-    const toastId = toast("正在删除渠道...", "loading");
+    const toastId = toast("Deleting channel...", "loading");
     try {
       const response = await fetch(`/api/channel?id=${channelId}`, {
         method: "DELETE",
@@ -162,32 +182,28 @@ export function Dashboard({
         },
       });
       if (!response.ok) {
-        throw new Error("删除渠道失败");
+        throw new Error("Failed to delete channel");
       }
-      update(toastId, "渠道已删除", "success");
+      update(toastId, "Channel deleted", "success");
       fetchData(undefined, currentPage, search, endpointFilter, statusFilter);
     } catch (err) {
-      update(toastId, err instanceof Error ? err.message : "删除失败", "error");
+      update(toastId, err instanceof Error ? err.message : "Delete failed", "error");
     }
   }, [token, toast, update, fetchData, currentPage, search, endpointFilter, statusFilter]);
 
-  // Page change handler
   const handlePageChange = useCallback((newPage: number) => {
     setCurrentPage(newPage);
     setLoading(true);
     fetchData(undefined, newPage, search, endpointFilter, statusFilter);
   }, [fetchData, search, endpointFilter, statusFilter]);
 
-  // Track previous values to detect changes
   const prevFiltersRef = useRef({ search, endpointFilter, statusFilter });
   const currentPageRef = useRef(currentPage);
 
-  // Keep page ref in sync
   useEffect(() => {
     currentPageRef.current = currentPage;
   }, [currentPage]);
 
-  // Fetch data on mount, refreshKey change, or filter changes
   useEffect(() => {
     const controller = new AbortController();
     const prevFilters = prevFiltersRef.current;
@@ -196,10 +212,8 @@ export function Dashboard({
       prevFilters.endpointFilter !== endpointFilter ||
       prevFilters.statusFilter !== statusFilter;
 
-    // Update previous filters
     prevFiltersRef.current = { search, endpointFilter, statusFilter };
 
-    // Reset to page 1 only when filters change, not on refreshKey change
     let pageToFetch = currentPageRef.current;
     if (filtersChanged) {
       pageToFetch = 1;
@@ -210,17 +224,17 @@ export function Dashboard({
     return () => controller.abort();
   }, [fetchData, refreshKey, search, endpointFilter, statusFilter]);
 
-  // Sort channels - filtering is now done server-side
   const sortedChannels = useMemo(() => {
     if (!data?.channels) return [];
 
     return data.channels
       .map((channel) => {
-        // Sort models by status (healthy first, then unhealthy, then unknown)
         const sortedModels = [...channel.models].sort((a, b) => {
-          const statusA = a.lastStatus === true ? 0 : a.lastStatus === false ? 1 : 2;
-          const statusB = b.lastStatus === true ? 0 : b.lastStatus === false ? 1 : 2;
-          return statusA - statusB;
+          const statusCmp = modelSortWeight(a.healthStatus) - modelSortWeight(b.healthStatus);
+          if (statusCmp !== 0) {
+            return statusCmp;
+          }
+          return a.modelName.localeCompare(b.modelName);
         });
 
         return { ...channel, models: sortedModels };
@@ -244,7 +258,7 @@ export function Dashboard({
           onClick={() => fetchData(undefined, currentPage)}
           className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
         >
-          重试
+          Retry
         </button>
       </div>
     );
@@ -259,19 +273,13 @@ export function Dashboard({
 
   return (
     <div className="space-y-6">
-      {/* Channel Manager (admin only) */}
       {isAuthenticated && <ChannelManager onUpdate={() => fetchData(undefined, currentPage, search, endpointFilter, statusFilter)} />}
 
-      {/* Proxy Key Manager (admin only) */}
-      {isAuthenticated && <ProxyKeyManager />}
-
-      {/* Summary Stats */}
       <Summary data={data.summary} />
 
-      {/* Channels List */}
       {sortedChannels.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          {data.channels.length === 0 ? "暂无渠道配置" : "没有匹配的结果"}
+          {data.channels.length === 0 ? "No channels configured" : "No matching results"}
         </div>
       ) : (
         <div className="grid gap-4">
@@ -279,6 +287,7 @@ export function Dashboard({
             <ChannelCard
               key={channel.id}
               channel={channel}
+              viewMode={viewMode}
               onRefresh={() => fetchData(undefined, currentPage, search, endpointFilter, statusFilter)}
               onDelete={handleDeleteChannel}
               testingModelIds={testingModelIds}
@@ -289,7 +298,6 @@ export function Dashboard({
         </div>
       )}
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 pt-4">
           <button
@@ -303,28 +311,23 @@ export function Dashboard({
             )}
           >
             <ChevronLeft className="h-4 w-4" />
-            上一页
+            Prev
           </button>
 
           <div className="flex items-center gap-1">
-            {/* Show page numbers */}
             {Array.from({ length: totalPages }, (_, i) => i + 1)
               .filter((page) => {
-                // Show first, last, current, and adjacent pages
                 if (page === 1 || page === totalPages) return true;
                 if (Math.abs(page - currentPage) <= 1) return true;
                 return false;
               })
               .map((page, index, arr) => {
-                // Add ellipsis if there's a gap
                 const prevPage = arr[index - 1];
                 const showEllipsis = prevPage && page - prevPage > 1;
 
                 return (
                   <span key={page} className="flex items-center">
-                    {showEllipsis && (
-                      <span className="px-2 text-muted-foreground">...</span>
-                    )}
+                    {showEllipsis && <span className="px-2 text-muted-foreground">...</span>}
                     <button
                       onClick={() => handlePageChange(page)}
                       disabled={loading}
@@ -352,13 +355,12 @@ export function Dashboard({
                 : "text-foreground hover:bg-accent"
             )}
           >
-            下一页
+            Next
             <ChevronRight className="h-4 w-4" />
           </button>
 
-          {/* Page info */}
           <span className="text-sm text-muted-foreground ml-4">
-            第 {currentPage} / {totalPages} 页，共 {pagination.totalChannels} 个渠道
+            Page {currentPage} / {totalPages}, {pagination.totalChannels} channels
           </span>
         </div>
       )}

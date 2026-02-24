@@ -1,78 +1,109 @@
-// GET /api/dashboard - Get channels and models status with pagination and filtering
+﻿// GET /api/dashboard - Get channels and models status with pagination and filtering
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { isAuthenticated } from "@/lib/middleware/auth";
-import { Prisma } from "@/generated/prisma";
+import { EndpointType, HealthStatus, Prisma } from "@/generated/prisma";
 
 const DEFAULT_PAGE_SIZE = 10;
+
+function toHealthStatus(status: HealthStatus): "healthy" | "partial" | "unhealthy" | "unknown" {
+  switch (status) {
+    case "HEALTHY":
+      return "healthy";
+    case "PARTIAL":
+      return "partial";
+    case "UNHEALTHY":
+      return "unhealthy";
+    case "UNKNOWN":
+    default:
+      return "unknown";
+  }
+}
+
+function parseEndpointFilter(value: string | null): EndpointType | null {
+  if (!value || value === "all") return null;
+  if (value === "CHAT" || value === "CLAUDE" || value === "GEMINI" || value === "CODEX" || value === "IMAGE") {
+    return value;
+  }
+  return null;
+}
+
+function parseStatusFilter(
+  value: string | null
+): HealthStatus | null {
+  switch (value) {
+    case "healthy":
+      return "HEALTHY";
+    case "partial":
+      return "PARTIAL";
+    case "unhealthy":
+      return "UNHEALTHY";
+    case "unknown":
+      return "UNKNOWN";
+    default:
+      return null;
+  }
+}
 
 export async function GET(request: NextRequest) {
   const authenticated = isAuthenticated(request);
 
-  // Parse pagination parameters
   const searchParams = request.nextUrl.searchParams;
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
   const pageSize = Math.max(1, Math.min(100, parseInt(searchParams.get("pageSize") || String(DEFAULT_PAGE_SIZE), 10)));
 
-  // Parse filter parameters
   const search = searchParams.get("search")?.trim() || "";
-  const endpointFilter = searchParams.get("endpointFilter") || "all";
-  const statusFilter = searchParams.get("statusFilter") || "all";
+  const endpointFilterRaw = searchParams.get("endpointFilter") || "all";
+  const statusFilterRaw = searchParams.get("statusFilter") || "all";
+
+  const endpointFilter = parseEndpointFilter(endpointFilterRaw);
+  const statusFilter = parseStatusFilter(statusFilterRaw);
 
   try {
-    // Build model filter conditions
     const modelWhereConditions: Prisma.ModelWhereInput[] = [];
 
-    // Search filter - filter by model name
     if (search) {
       modelWhereConditions.push({
-        modelName: { contains: search, mode: "insensitive" },
+        modelName: { contains: search },
       });
     }
 
-    // Endpoint filter - filter by detected endpoints (PostgreSQL native array)
-    if (endpointFilter !== "all") {
+    if (endpointFilter) {
       modelWhereConditions.push({
-        detectedEndpoints: { has: endpointFilter },
+        modelEndpoints: {
+          some: {
+            endpointType: endpointFilter,
+          },
+        },
       });
     }
 
-    // Status filter - filter by lastStatus
-    if (statusFilter === "healthy") {
-      modelWhereConditions.push({ lastStatus: true });
-    } else if (statusFilter === "unhealthy") {
-      modelWhereConditions.push({ lastStatus: false });
-    } else if (statusFilter === "unknown") {
-      modelWhereConditions.push({ lastStatus: null });
+    if (statusFilter) {
+      modelWhereConditions.push({ healthStatus: statusFilter });
     }
 
     const modelWhere: Prisma.ModelWhereInput | undefined =
       modelWhereConditions.length > 0 ? { AND: modelWhereConditions } : undefined;
 
-    // Get channels that have at least one matching model (for filtered queries)
-    // or all enabled channels (for unfiltered queries)
-    const hasFilters = search || endpointFilter !== "all" || statusFilter !== "all";
+    const hasFilters = Boolean(search) || Boolean(endpointFilter) || Boolean(statusFilter);
 
     let channelIds: string[] | undefined;
     if (hasFilters) {
-      // Find channels that have matching models
       const channelsWithMatchingModels = await prisma.channel.findMany({
         where: {
           enabled: true,
-          models: { some: modelWhere },
+          models: { some: modelWhere ?? {} },
         },
         select: { id: true },
       });
       channelIds = channelsWithMatchingModels.map((c) => c.id);
     }
 
-    // Get total count for pagination
     const totalChannels = hasFilters
       ? channelIds?.length || 0
       : await prisma.channel.count({ where: { enabled: true } });
 
-    // Fetch paginated channels with filtered models
     const channels = await prisma.channel.findMany({
       where: {
         enabled: true,
@@ -81,17 +112,29 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         name: true,
-        baseUrl: authenticated, // Only show baseUrl to authenticated users
+        baseUrl: authenticated,
         createdAt: true,
         models: {
           where: modelWhere,
           select: {
             id: true,
             modelName: true,
-            detectedEndpoints: true,
+            healthStatus: true,
             lastStatus: true,
             lastLatency: true,
             lastCheckedAt: true,
+            modelEndpoints: {
+              select: {
+                endpointType: true,
+                status: true,
+                latency: true,
+                statusCode: true,
+                errorMsg: true,
+                responseContent: true,
+                checkedAt: true,
+              },
+              orderBy: { endpointType: "asc" },
+            },
             checkLogs: {
               select: {
                 id: true,
@@ -99,13 +142,12 @@ export async function GET(request: NextRequest) {
                 latency: true,
                 statusCode: true,
                 endpointType: true,
-                // Detection messages should be visible even when not logged in
                 responseContent: true,
                 errorMsg: true,
                 createdAt: true,
               },
               orderBy: { createdAt: "desc" },
-              take: 7, // Last 7 checks for heatmap
+              take: 24,
             },
           },
         },
@@ -118,49 +160,43 @@ export async function GET(request: NextRequest) {
       take: pageSize,
     });
 
-    // Calculate summary statistics for ALL channels (not just current page)
     const allChannelsForStats = await prisma.channel.findMany({
       where: { enabled: true },
       select: {
         models: {
           select: {
             id: true,
-            lastStatus: true,
-            checkLogs: {
-              select: {
-                status: true,
-                endpointType: true,
-              },
-              orderBy: { createdAt: "desc" },
-              take: 7,
-            },
+            healthStatus: true,
           },
         },
       },
     });
 
     const totalModels = allChannelsForStats.reduce((sum, ch) => sum + ch.models.length, 0);
-
-    // A model is healthy if all its tested endpoints are successful
-    const healthyModels = allChannelsForStats.reduce((sum, ch) => {
-      return sum + ch.models.filter((m) => {
-        if (m.checkLogs.length === 0) return false;
-
-        // Get latest status for each endpoint type
-        const endpointStatuses: Record<string, string> = {};
-        for (const log of m.checkLogs) {
-          if (!endpointStatuses[log.endpointType]) {
-            endpointStatuses[log.endpointType] = log.status;
-          }
-        }
-
-        // Model is healthy only if all tested endpoints are successful
-        const statuses = Object.values(endpointStatuses);
-        return statuses.length > 0 && statuses.every((s) => s === "SUCCESS");
-      }).length;
-    }, 0);
+    const healthyModels = allChannelsForStats.reduce(
+      (sum, ch) => sum + ch.models.filter((m) => m.healthStatus === "HEALTHY").length,
+      0
+    );
+    const partialModels = allChannelsForStats.reduce(
+      (sum, ch) => sum + ch.models.filter((m) => m.healthStatus === "PARTIAL").length,
+      0
+    );
 
     const totalPages = Math.ceil(totalChannels / pageSize);
+
+    const normalizedChannels = channels.map((channel) => ({
+      ...channel,
+      models: channel.models.map((model) => ({
+        id: model.id,
+        modelName: model.modelName,
+        healthStatus: toHealthStatus(model.healthStatus),
+        lastStatus: model.lastStatus,
+        lastLatency: model.lastLatency,
+        lastCheckedAt: model.lastCheckedAt,
+        endpointStatuses: model.modelEndpoints,
+        checkLogs: model.checkLogs,
+      })),
+    }));
 
     return NextResponse.json({
       authenticated,
@@ -168,6 +204,7 @@ export async function GET(request: NextRequest) {
         totalChannels,
         totalModels,
         healthyModels,
+        partialModels,
         healthRate: totalModels > 0 ? Math.round((healthyModels / totalModels) * 100) : 0,
       },
       pagination: {
@@ -176,9 +213,9 @@ export async function GET(request: NextRequest) {
         totalPages,
         totalChannels,
       },
-      channels,
+      channels: normalizedChannels,
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to fetch dashboard data", code: "FETCH_ERROR" },
       { status: 500 }

@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { name, baseUrl, apiKey, proxy, models, keyMode = "single", routeStrategy = "round_robin", keys } = body;
+    const { name, baseUrl, apiKey, proxy, models, keyMode = "single", keys } = body;
 
     // Validate required fields
     if (!name || !baseUrl || !apiKey) {
@@ -86,7 +86,6 @@ export async function POST(request: NextRequest) {
           enabled: true,
           sortOrder: nextSortOrder,
           keyMode,
-          routeStrategy,
         },
       });
     });
@@ -105,7 +104,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // If models are provided, create them with empty detectedEndpoints (will be populated after testing)
+    // If models are provided, create them directly (status fields are initialized by defaults)
     if (models && Array.isArray(models) && models.length > 0) {
       const uniqueModels = Array.from(
         new Set(
@@ -146,7 +145,7 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { id, name, baseUrl, apiKey, proxy, enabled, orders, keyMode, routeStrategy, keys } = body;
+    const { id, name, baseUrl, apiKey, proxy, enabled, orders, keyMode, keys } = body;
 
     // Batch update channel sort order
     if (Array.isArray(orders)) {
@@ -193,7 +192,6 @@ export async function PUT(request: NextRequest) {
     if (proxy !== undefined) updateData.proxy = proxy || null;
     if (enabled !== undefined) updateData.enabled = Boolean(enabled);
     if (keyMode !== undefined) updateData.keyMode = keyMode;
-    if (routeStrategy !== undefined) updateData.routeStrategy = routeStrategy;
 
     const channel = await prisma.$transaction(async (tx) => {
       const updatedChannel = await tx.channel.update({

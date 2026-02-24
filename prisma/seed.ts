@@ -1,13 +1,5 @@
 import { PrismaClient } from "../src/generated/prisma";
-import { PrismaPg } from "@prisma/adapter-pg";
-
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("DATABASE_URL environment variable is not set");
-}
-
-const adapter = new PrismaPg({ connectionString });
-const prisma = new PrismaClient({ adapter });
+const prisma = new PrismaClient();
 
 async function main() {
   console.log("Start seeding...");
@@ -29,10 +21,10 @@ async function main() {
 
   // Create test models for the channel
   const models = [
-    { modelName: "gpt-4", endpoints: ["CHAT"] },
-    { modelName: "gpt-3.5-turbo", endpoints: ["CHAT"] },
-    { modelName: "claude-3-opus", endpoints: ["CLAUDE"] },
-    { modelName: "gemini-pro", endpoints: ["GEMINI"] },
+    { modelName: "gpt-4" },
+    { modelName: "gpt-3.5-turbo" },
+    { modelName: "claude-3-opus" },
+    { modelName: "gemini-pro" },
   ];
 
   for (const model of models) {
@@ -54,7 +46,7 @@ async function main() {
       data: {
         channelId: channel.id,
         modelName: model.modelName,
-        detectedEndpoints: model.endpoints,
+        healthStatus: "UNKNOWN",
         lastStatus: null,
         lastLatency: null,
       },

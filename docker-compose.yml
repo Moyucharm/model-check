@@ -1,37 +1,15 @@
-# Model Check - Docker Compose Configuration
-# https://github.com/chxcodepro/model-check
-#
-# Usage (通过 COMPOSE_PROFILES 控制启动哪些服务):
-#   全本地：    COMPOSE_PROFILES="local"        → PostgreSQL + Redis
-#   云数据库：  COMPOSE_PROFILES="redis"        → 仅 Redis（数据库用云端）
-#   云 Redis：  COMPOSE_PROFILES="db"           → 仅 PostgreSQL（Redis 用云端）
-#   全云端：    不设置 COMPOSE_PROFILES          → 都不启动
-#
-# 镜像模式（推荐，无需构建）:
-#   默认使用预构建镜像，快速部署
-#
-# 本地构建模式（开发用）:
-#   BUILD_LOCAL=true docker compose up -d --build
-#
-# Data Persistence:
-#   PostgreSQL data: ./data/postgres
-#   Redis data: ./data/redis
+﻿# Model Check - Docker Compose Configuration
+# https://github.com/Moyucharm/model-check
 
 services:
-  # ========================================
-  # Application
-  # ========================================
   app:
-    image: ${APP_IMAGE:-ghcr.io/chxcodepro/model-check:latest}
+    image: ${APP_IMAGE:-ghcr.io/moyucharm/model-check:latest}
     build:
       context: .
       dockerfile: Dockerfile
     container_name: model-check
-    restart: always
+    restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
-        required: false
       redis:
         condition: service_healthy
         required: false
@@ -39,15 +17,14 @@ services:
       - "${APP_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=${DOCKER_DATABASE_URL:-postgresql://modelcheck:modelcheck123456@postgres:5432/model_check}
-      - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
+      - DATABASE_URL=${DOCKER_DATABASE_URL:-file:/app/data/model-check.db}
+      - REDIS_URL=${DOCKER_REDIS_URL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
       - AUTO_DETECT_ENABLED=${AUTO_DETECT_ENABLED:-false}
       - DETECT_PROMPT=${DETECT_PROMPT:-1+1=2? yes or no}
       - GLOBAL_PROXY=${GLOBAL_PROXY:-}
-      - PROXY_API_KEY=${PROXY_API_KEY:-}
-      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 0,8,12,16,20 * * *}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 * * * *}
       - CRON_TIMEZONE=${CRON_TIMEZONE:-Asia/Shanghai}
       - CLEANUP_SCHEDULE=${CLEANUP_SCHEDULE:-0 2 * * *}
       - LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS:-7}
@@ -59,6 +36,8 @@ services:
       - WEBDAV_USERNAME=${WEBDAV_USERNAME:-}
       - WEBDAV_PASSWORD=${WEBDAV_PASSWORD:-}
       - WEBDAV_FILENAME=${WEBDAV_FILENAME:-}
+    volumes:
+      - ./data:/app/data
     networks:
       - model-check-network
     healthcheck:
@@ -68,40 +47,11 @@ services:
       retries: 3
       start_period: 60s
 
-  # ========================================
-  # PostgreSQL Database
-  # ========================================
-  postgres:
-    image: docker.m.daocloud.io/library/postgres:16-alpine
-    container_name: model-check-postgres
-    restart: always
-    profiles: ["local", "db"]
-    environment:
-      POSTGRES_DB: model_check
-      POSTGRES_USER: modelcheck
-      POSTGRES_PASSWORD: modelcheck123456
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-      - ./prisma/init.postgresql.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - model-check-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U modelcheck -d model_check"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  # ========================================
-  # Redis Cache & Queue
-  # ========================================
   redis:
     image: docker.m.daocloud.io/library/redis:7-alpine
     container_name: model-check-redis
     restart: always
-    profiles: ["local", "redis"]
+    profiles: ["redis"]
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -115,9 +65,6 @@ services:
       retries: 5
     command: redis-server --appendonly yes --stop-writes-on-bgsave-error no
 
-# ========================================
-# Networks
-# ========================================
 networks:
   model-check-network:
     driver: bridge

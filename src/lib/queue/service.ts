@@ -2,6 +2,7 @@
 
 import prisma from "@/lib/prisma";
 import { getEndpointsToTest, fetchModels } from "@/lib/detection";
+import { resetModelsDetectionState } from "@/lib/detection/model-state";
 import {
   addDetectionJobsBulk,
   getQueueStats,
@@ -115,15 +116,11 @@ export async function triggerFullDetection(): Promise<{
   // This clears the UI display while preserving checkLogs history
   const channelIds = channels.map((c) => c.id);
   if (channelIds.length > 0) {
-    await prisma.model.updateMany({
+    const modelIdsToReset = await prisma.model.findMany({
       where: { channelId: { in: channelIds } },
-      data: {
-        lastStatus: null,
-        lastLatency: null,
-        lastCheckedAt: null,
-        detectedEndpoints: [],
-      },
+      select: { id: true },
     });
+    await resetModelsDetectionState(modelIdsToReset.map((m) => m.id));
   }
 
   // Read models from database directly (no remote model sync in detection flow)
@@ -134,7 +131,6 @@ export async function triggerFullDetection(): Promise<{
         select: {
           id: true,
           modelName: true,
-          detectedEndpoints: true,
           channelKeyId: true,
         },
       },
@@ -188,7 +184,6 @@ export async function triggerChannelDetection(
         select: {
           id: true,
           modelName: true,
-          detectedEndpoints: true,
           channelKeyId: true,
         },
       },
@@ -210,16 +205,7 @@ export async function triggerChannelDetection(
 
   // Reset models status to "untested" state before detection
   if (modelsToTest.length > 0) {
-    const modelIdsToReset = modelsToTest.map((m) => m.id);
-    await prisma.model.updateMany({
-      where: { id: { in: modelIdsToReset } },
-      data: {
-        lastStatus: null,
-        lastLatency: null,
-        lastCheckedAt: null,
-        detectedEndpoints: [],
-      },
-    });
+    await resetModelsDetectionState(modelsToTest.map((m) => m.id));
   }
 
   const jobs = await buildJobsForModels(channel, modelsToTest);
@@ -258,15 +244,7 @@ export async function triggerModelDetection(modelId: string): Promise<{
   }
 
   // Reset model status to "untested" state before detection
-  await prisma.model.update({
-    where: { id: modelId },
-    data: {
-      lastStatus: null,
-      lastLatency: null,
-      lastCheckedAt: null,
-      detectedEndpoints: [],
-    },
-  });
+  await resetModelsDetectionState([modelId]);
 
   // Resolve apiKey
   const apiKey = await resolveApiKey(model, model.channel.apiKey);
@@ -666,7 +644,6 @@ export async function triggerSelectiveDetection(
         select: {
           id: true,
           modelName: true,
-          detectedEndpoints: true,
           channelKeyId: true,
         },
       },
@@ -695,15 +672,7 @@ export async function triggerSelectiveDetection(
 
   // Reset models status to "untested" state before detection
   const modelIdsToReset = [...new Set(jobs.map((j) => j.modelId))];
-  await prisma.model.updateMany({
-    where: { id: { in: modelIdsToReset } },
-    data: {
-      lastStatus: null,
-      lastLatency: null,
-      lastCheckedAt: null,
-      detectedEndpoints: [],
-    },
-  });
+  await resetModelsDetectionState(modelIdsToReset);
 
   const jobIds = await addDetectionJobsBulk(jobs);
   const { modelCount, jobCount } = getDetectionCounts(jobs);

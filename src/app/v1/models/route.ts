@@ -1,31 +1,11 @@
-// GET /v1/models - Return all models from all enabled channels
+﻿import { NextResponse } from "next/server";
 
-import { NextRequest, NextResponse } from "next/server";
-import { getAllModelsWithChannels, verifyProxyKeyAsync, errorResponse } from "@/lib/proxy";
-
-export async function GET(request: NextRequest) {
-  // Verify proxy API key (async for multi-key support)
-  const { error: authError, keyResult } = await verifyProxyKeyAsync(request);
-  if (authError) return authError;
-
-  try {
-    // Get all models from database with channel info, filtered by key permissions
-    const models = await getAllModelsWithChannels(keyResult);
-
-    // Transform to OpenAI-compatible format with channel prefix for grouping
-    const data = {
-      object: "list",
-      data: models.map((m) => ({
-        id: `${m.channelName}/${m.modelName}`,
-        object: "model",
-        created: 0,
-        owned_by: m.channelName,
-      })),
-    };
-
-    return NextResponse.json(data);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return errorResponse(`Failed to fetch models: ${message}`, 500);
-  }
+function notFound() {
+  return NextResponse.json({ error: "Not Found" }, { status: 404 });
 }
+
+export async function GET() { return notFound(); }
+export async function POST() { return notFound(); }
+export async function PUT() { return notFound(); }
+export async function PATCH() { return notFound(); }
+export async function DELETE() { return notFound(); }

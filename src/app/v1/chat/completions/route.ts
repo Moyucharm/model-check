@@ -1,105 +1,11 @@
-// POST /v1/chat/completions - Proxy OpenAI Chat API
-// Supports both streaming and non-streaming responses
-// Streaming uses SSE with data: prefix format
-// Automatically routes to the correct channel based on model name
+﻿import { NextResponse } from "next/server";
 
-import { NextRequest, NextResponse } from "next/server";
-import {
-  findChannelByModelWithPermission,
-  buildUpstreamHeaders,
-  proxyRequest,
-  streamResponse,
-  errorResponse,
-  normalizeBaseUrl,
-  verifyProxyKeyAsync,
-} from "@/lib/proxy";
-
-const CLI_DETECT_PROMPT = process.env.DETECT_PROMPT || "1+1=2? yes or no";
-
-function normalizeMessagesForGeminiCli(messages: unknown): unknown {
-  if (!Array.isArray(messages)) {
-    return messages;
-  }
-
-  return messages.map((message) => {
-    if (!message || typeof message !== "object") {
-      return message;
-    }
-
-    const msg = message as Record<string, unknown>;
-    const role = typeof msg.role === "string" ? msg.role : "";
-
-    if (role === "assistant") {
-      return msg;
-    }
-
-    // 只在 content 缺失或为空时补上默认值，否则保留用户原始消息
-    if (!msg.content) {
-      return { ...msg, content: CLI_DETECT_PROMPT };
-    }
-
-    return msg;
-  });
+function notFound() {
+  return NextResponse.json({ error: "Not Found" }, { status: 404 });
 }
 
-export async function POST(request: NextRequest) {
-  // Verify proxy API key (async for multi-key support)
-  const { error: authError, keyResult } = await verifyProxyKeyAsync(request);
-  if (authError) return authError;
-
-  try {
-    // Parse request body
-    const body = await request.json();
-    const modelName = body.model;
-
-    if (!modelName) {
-      return errorResponse("Missing 'model' field in request body", 400);
-    }
-
-    if (typeof modelName !== "string" || modelName.indexOf("/") <= 0 || modelName.endsWith("/")) {
-      return errorResponse("Model must use channel prefix format: channelName/modelName", 400);
-    }
-
-    // Find channel by model name with permission check (requires "channelName/modelName" format)
-    const channel = await findChannelByModelWithPermission(modelName, keyResult!);
-    if (!channel) {
-      return errorResponse(`Model not found or access denied: ${modelName}`, 404);
-    }
-
-    // Use actual model name (without channel prefix) for upstream request
-    // Compatibility: normalize Gemini CLI message payloads that may omit content on non-assistant roles
-    const upstreamBody = {
-      ...body,
-      model: channel.actualModelName,
-      messages: normalizeMessagesForGeminiCli(body.messages),
-    };
-
-    const isStream = body.stream === true;
-    const baseUrl = normalizeBaseUrl(channel.baseUrl);
-    const url = `${baseUrl}/v1/chat/completions`;
-    const headers = buildUpstreamHeaders(channel.apiKey, "openai");
-
-    // Forward request to upstream (with channel proxy support)
-    const response = await proxyRequest(url, "POST", headers, upstreamBody, channel.proxy);
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      return errorResponse(
-        `Upstream error: ${response.status} - ${errorText.slice(0, 500)}`,
-        response.status
-      );
-    }
-
-    // Handle streaming response (SSE format)
-    if (isStream) {
-      return streamResponse(response);
-    }
-
-    // Handle non-streaming response
-    const data = await response.json();
-    return NextResponse.json(data);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return errorResponse(`Proxy error: ${message}`, 502);
-  }
-}
+export async function GET() { return notFound(); }
+export async function POST() { return notFound(); }
+export async function PUT() { return notFound(); }
+export async function PATCH() { return notFound(); }
+export async function DELETE() { return notFound(); }

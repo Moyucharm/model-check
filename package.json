@@ -18,7 +18,7 @@
     "db:sync": "tsx scripts/db-sync.ts"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "^7.0.0",
+    "@prisma/adapter-better-sqlite3": "^7.3.0",
     "@prisma/client": "^7.0.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.67.2",
@@ -30,7 +30,6 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.563.0",
     "next": "16.1.6",
-    "pg": "^8.16.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "socks-proxy-agent": "^8.0.5",
@@ -43,7 +42,6 @@
     "@types/cron": "^2.0.1",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
-    "@types/pg": "^8.15.4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

@@ -1,166 +1,48 @@
 import Redis from "ioredis";
-import { EventEmitter } from "events";
+
+const REDIS_URL = process.env.REDIS_URL?.trim() || "";
+
+export const isRedisConfigured = REDIS_URL.length > 0;
 
 const globalForRedis = globalThis as unknown as {
-  redis: Redis | undefined;
-  pubsubSubscriber: Redis | undefined;
-  pubsubEmitter: EventEmitter | undefined;
-  pubsubConnected: boolean | undefined;
-  pubsubChannels: Set<string> | undefined;
+  redisClient?: Redis;
 };
 
-function attachErrorHandler(client: Redis, label = "Redis") {
-  client.on("error", (err) => {
-    if ((err as NodeJS.ErrnoException).code === "ECONNREFUSED") {
-    } else {
+function attachErrorHandler(client: Redis, label: string): void {
+  client.on("error", (error) => {
+    if (process.env.NODE_ENV === "development") {
+      console.error(`[${label}]`, error);
     }
   });
 }
 
-function createRedisClient() {
-  const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-  const client = new Redis(redisUrl, {
+function createRedisClient(): Redis {
+  if (!isRedisConfigured) {
+    throw new Error("Redis is not configured. Set REDIS_URL to enable Redis-backed queue.");
+  }
+
+  const client = new Redis(REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     retryStrategy(times) {
-      if (times > 10) {
-        return null;
-      }
-      const delay = Math.min(times * 500, 5000);
-      return delay;
+      if (times > 10) return null;
+      return Math.min(times * 500, 5000);
     },
   });
 
-  attachErrorHandler(client);
-  client.on("connect", () => {
-  });
-
-  // 覆盖 duplicate，让复制出的连接也带 error 监听
-  const originalDuplicate = client.duplicate.bind(client);
-  client.duplicate = (...args: Parameters<typeof client.duplicate>) => {
-    const dup = originalDuplicate(...args);
-    attachErrorHandler(dup, "Redis:dup");
-    return dup;
-  };
-
+  attachErrorHandler(client, "redis");
   return client;
 }
 
-export const redis = globalForRedis.redis ?? createRedisClient();
-
-if (process.env.NODE_ENV !== "production") globalForRedis.redis = redis;
-
-/**
- * Shared Pub/Sub infrastructure to avoid creating new Redis connections per SSE request.
- * Uses a single subscriber connection and EventEmitter to broadcast messages to all listeners.
- */
-export interface PubSubManager {
-  subscribe(channel: string, callback: (message: string) => void): () => void;
-  isConnected(): boolean;
+export function getRedisClient(): Redis {
+  if (!globalForRedis.redisClient) {
+    globalForRedis.redisClient = createRedisClient();
+  }
+  return globalForRedis.redisClient;
 }
 
-function createPubSubManager(): PubSubManager {
-  const emitter = globalForRedis.pubsubEmitter ?? new EventEmitter();
-  emitter.setMaxListeners(1000); // Allow many SSE clients
-
-  // Use global state to persist across hot reloads
-  const subscribedChannels = globalForRedis.pubsubChannels ?? new Set<string>();
-  let subscriber: Redis | null = globalForRedis.pubsubSubscriber ?? null;
-  let isSubscriberConnected = globalForRedis.pubsubConnected ?? false;
-  let subscriberPromise: Promise<Redis> | null = null;
-
-  // Store in global immediately
-  globalForRedis.pubsubEmitter = emitter;
-  globalForRedis.pubsubChannels = subscribedChannels;
-
-  const ensureSubscriber = async (): Promise<Redis> => {
-    // Return existing connected subscriber
-    if (subscriber && isSubscriberConnected) {
-      return subscriber;
-    }
-
-    // Return pending connection promise to avoid duplicate connections
-    if (subscriberPromise) return subscriberPromise;
-
-    subscriberPromise = (async () => {
-      const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-      const newSubscriber = new Redis(redisUrl, {
-        maxRetriesPerRequest: null,
-        enableReadyCheck: false,
-        lazyConnect: true,
-      });
-
-      attachErrorHandler(newSubscriber, "Redis:PubSub");
-
-      newSubscriber.on("message", (channel, message) => {
-        emitter.emit(`message:${channel}`, message);
-      });
-
-      newSubscriber.on("connect", () => {
-        isSubscriberConnected = true;
-        globalForRedis.pubsubConnected = true;
-      });
-
-      newSubscriber.on("close", () => {
-        isSubscriberConnected = false;
-        globalForRedis.pubsubConnected = false;
-        subscriberPromise = null; // Allow reconnection
-      });
-
-      newSubscriber.on("error", () => {
-        subscriberPromise = null; // Allow retry on error
-      });
-
-      await newSubscriber.connect();
-      subscriber = newSubscriber;
-
-      // Store in global for singleton pattern
-      globalForRedis.pubsubSubscriber = subscriber;
-
-      // Re-subscribe to all channels after reconnection
-      for (const ch of subscribedChannels) {
-        await subscriber.subscribe(ch);
-      }
-
-      return subscriber;
-    })();
-
-    return subscriberPromise;
-  };
-
-  return {
-    subscribe(channel: string, callback: (message: string) => void): () => void {
-      const eventName = `message:${channel}`;
-
-      // Add listener immediately (messages will be buffered by EventEmitter)
-      emitter.on(eventName, callback);
-
-      // Track channel for re-subscription on reconnect
-      const wasNew = !subscribedChannels.has(channel);
-      subscribedChannels.add(channel);
-
-      // Subscribe to Redis channel
-      ensureSubscriber().then((sub) => {
-        if (wasNew) {
-          sub.subscribe(channel)
-            .catch((err) => {
-            });
-        }
-      }).catch((err) => {
-      });
-
-      // Return unsubscribe function
-      return () => {
-        emitter.off(eventName, callback);
-      };
-    },
-
-    isConnected(): boolean {
-      return isSubscriberConnected;
-    },
-  };
+export function createRedisDuplicate(label: string): Redis {
+  const duplicate = getRedisClient().duplicate();
+  attachErrorHandler(duplicate, label);
+  return duplicate;
 }
-
-export const pubsubManager = createPubSubManager();
-
-export default redis;

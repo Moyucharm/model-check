@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS "channels" (
   "enabled" BOOLEAN NOT NULL DEFAULT true,
   "sort_order" INTEGER NOT NULL DEFAULT 0,
   "key_mode" TEXT NOT NULL DEFAULT 'single',
-  "route_strategy" TEXT NOT NULL DEFAULT 'round_robin',
   "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id")
@@ -140,7 +139,6 @@ CREATE TABLE IF NOT EXISTS "model_keywords" (
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "proxy" VARCHAR(500);
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "sort_order" INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "key_mode" TEXT NOT NULL DEFAULT 'single';
-ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "route_strategy" TEXT NOT NULL DEFAULT 'round_robin';
 
 -- channel_keys: 多 Key 字段
 ALTER TABLE "channel_keys" ADD COLUMN IF NOT EXISTS "name" VARCHAR(100);

@@ -54,7 +54,6 @@ export async function POST(request: NextRequest) {
       proxy: string | null;
       enabled: boolean;
       keyMode?: string;
-      routeStrategy?: string;
       channelKeys?: { apiKey: string; name: string | null }[];
       action: "create" | "update";
     }> = [];
@@ -114,7 +113,6 @@ export async function POST(request: NextRequest) {
               proxy: ch.proxy || null,
               enabled: ch.enabled ?? true,
               keyMode: ch.keyMode || "single",
-              routeStrategy: ch.routeStrategy || "round_robin",
             },
           });
           // Import channel keys if present
@@ -140,7 +138,6 @@ export async function POST(request: NextRequest) {
             proxy: ch.proxy || null,
             enabled: ch.enabled ?? true,
             keyMode: ch.keyMode || "single",
-            routeStrategy: ch.routeStrategy || "round_robin",
             channelKeys: ch.channelKeys,
             action: "update",
           });
@@ -157,7 +154,6 @@ export async function POST(request: NextRequest) {
             proxy: ch.proxy || null,
             enabled: ch.enabled ?? true,
             keyMode: ch.keyMode || "single",
-            routeStrategy: ch.routeStrategy || "round_robin",
           },
         });
         // Import channel keys if present
@@ -182,7 +178,6 @@ export async function POST(request: NextRequest) {
           proxy: ch.proxy || null,
           enabled: ch.enabled ?? true,
           keyMode: ch.keyMode || "single",
-          routeStrategy: ch.routeStrategy || "round_robin",
           channelKeys: ch.channelKeys,
           action: "create",
         });
@@ -227,7 +222,6 @@ export async function POST(request: NextRequest) {
               proxy: true,
               enabled: true,
               keyMode: true,
-              routeStrategy: true,
               channelKeys: { select: { apiKey: true, name: true } },
             },
           });
