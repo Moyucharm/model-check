@@ -243,7 +243,7 @@ export default function Home() {
           >
             model-check
           </a>
-          {" - API channel availability monitor"}
+          {" - API 渠道可用性监控"}
           <span className="ml-2 text-xs text-muted-foreground/60">v{process.env.APP_VERSION}</span>
         </div>
       </footer>

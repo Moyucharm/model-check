@@ -67,6 +67,7 @@ export function ModelFilterModal({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [togglingAll, setTogglingAll] = useState(false);
+  const fetchInitiatedRef = useRef(false);
 
   const headers = useMemo(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }),
@@ -165,7 +166,10 @@ export function ModelFilterModal({
   }, [targetChannels, headers, toast]);
 
   useEffect(() => {
-    if (token && targetChannels.length > 0) fetchModels();
+    if (token && targetChannels.length > 0 && !fetchInitiatedRef.current) {
+      fetchInitiatedRef.current = true;
+      fetchModels();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 

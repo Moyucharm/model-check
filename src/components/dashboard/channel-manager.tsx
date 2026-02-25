@@ -710,7 +710,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "同步失败");
 
-      toast(`获取到 ${data.total} 个模型`, "success");
+      toast(`同步完成，保存了 ${data.total} 个模型`, "success");
     } catch (err) {
       // Show error message on the channel card instead of global error
       const message = err instanceof Error ? err.message : "同步失败";
@@ -766,9 +766,9 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
       }
 
       if (failedCount > 0) {
-        toast(`全量同步完成，获取到 ${totalModels} 个模型，${failedCount} 个渠道失败`, "error");
+        toast(`全量同步完成，保存了 ${totalModels} 个模型，${failedCount} 个渠道失败`, "error");
       } else {
-        toast(`全量同步完成，获取到 ${totalModels} 个模型`, "success");
+        toast(`全量同步完成，保存了 ${totalModels} 个模型`, "success");
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : "全量同步失败", "error");
@@ -1306,7 +1306,7 @@ export function ChannelManager({ onUpdate, className }: ChannelManagerProps) {
               {/* Base URL */}
               <div>
                 <label className="block text-sm font-medium mb-1">
-                  Base URL <span className="text-destructive">*</span>
+                  接口地址 <span className="text-destructive">*</span>
                 </label>
                 <input
                   type="url"

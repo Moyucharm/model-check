@@ -79,11 +79,11 @@ const ENDPOINT_META: Record<
     base: string;
   }
 > = {
-  CHAT: { label: "Chat", base: "blue" },
+  CHAT: { label: "聊天", base: "blue" },
   CLAUDE: { label: "Claude CLI", base: "orange" },
   GEMINI: { label: "Gemini CLI", base: "cyan" },
   CODEX: { label: "Codex CLI", base: "violet" },
-  IMAGE: { label: "Image", base: "pink" },
+  IMAGE: { label: "图像", base: "pink" },
 };
 
 function endpointLabel(type: string): string {
@@ -100,10 +100,10 @@ function formatRelativeTime(dateStr: string | null): string {
   const diffHours = Math.floor(diffMins / 60);
   const diffDays = Math.floor(diffHours / 24);
 
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${diffDays}d ago`;
+  if (diffMins < 1) return "刚刚";
+  if (diffMins < 60) return `${diffMins}分钟前`;
+  if (diffHours < 24) return `${diffHours}小时前`;
+  return `${diffDays}天前`;
 }
 
 function modelStatus(model: Model): "healthy" | "partial" | "unhealthy" | "unknown" {
@@ -139,7 +139,7 @@ function EndpointStatusBadge({ endpoint }: { endpoint: EndpointStatus }) {
       title={`${label} | ${endpoint.status}${endpoint.statusCode ? ` | HTTP ${endpoint.statusCode}` : ""}${endpoint.errorMsg ? ` | ${endpoint.errorMsg}` : ""}`}
     >
       {label}
-      <span>{success ? "OK" : endpoint.statusCode || "FAIL"}</span>
+      <span>{success ? "正常" : endpoint.statusCode || "失败"}</span>
     </span>
   );
 }
@@ -194,7 +194,7 @@ function ModelRow({
             <button
               onClick={handleCopy}
               className="p-0.5 rounded hover:bg-accent transition-colors"
-              title="Copy channel/model"
+              title="复制渠道/模型"
             >
               {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
             </button>
@@ -209,7 +209,7 @@ function ModelRow({
                 />
               ))
             ) : (
-              <span className="text-xs text-muted-foreground">No endpoint checks yet</span>
+              <span className="text-xs text-muted-foreground">尚无端点检查</span>
             )}
           </div>
         </div>
@@ -238,7 +238,7 @@ function ModelRow({
                 "rounded-md p-1.5 transition-colors",
                 isTesting && hoveringStop ? "bg-rose-500/15" : "hover:bg-accent"
               )}
-              title={isTesting ? "Stop detection" : "Run detection"}
+              title={isTesting ? "停止检测" : "运行检测"}
             >
               {isTesting ? (
                 hoveringStop ? (
@@ -315,7 +315,7 @@ export function ChannelCard({
 
     if (isChannelTesting) {
       onStopModels?.(modelIds);
-      const toastId = toast("Stopping channel detection...", "loading");
+      const toastId = toast("正在停止渠道检测...", "loading");
 
       try {
         const response = await fetch("/api/detect", {
@@ -326,19 +326,19 @@ export function ChannelCard({
         });
 
         if (response.ok) {
-          update(toastId, `Stopped detection for ${channel.name}`, "success");
+          update(toastId, `已停止 ${channel.name} 的检测`, "success");
         } else {
-          update(toastId, "Stop request failed", "error");
+          update(toastId, "停止请求失败", "error");
         }
       } catch {
-        update(toastId, "Network error", "error");
+        update(toastId, "网络错误", "error");
       }
 
       return;
     }
 
     onTestModels?.(modelIds);
-    const toastId = toast(`Starting detection for ${modelIds.length} models...`, "loading");
+    const toastId = toast(`正在为 ${modelIds.length} 个模型启动检测...`, "loading");
 
     try {
       const response = await fetch("/api/detect", {
@@ -352,12 +352,12 @@ export function ChannelCard({
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to trigger detection");
+        throw new Error(data.error || "启动检测失败");
       }
 
-      update(toastId, `Detection started for ${channel.name}`, "success");
+      update(toastId, `已为 ${channel.name} 启动检测`, "success");
     } catch {
-      update(toastId, `Failed to start detection for ${channel.name}`, "error");
+      update(toastId, `无法为 ${channel.name} 启动检测`, "error");
     }
   };
 
@@ -366,7 +366,7 @@ export function ChannelCard({
 
     if (testingModelIds.has(modelId)) {
       onStopModels?.([modelId]);
-      const toastId = toast(`Stopping ${modelName}...`, "loading");
+      const toastId = toast(`正在停止 ${modelName}...`, "loading");
 
       try {
         const response = await fetch("/api/detect", {
@@ -377,19 +377,19 @@ export function ChannelCard({
         });
 
         if (response.ok) {
-          update(toastId, `Stopped ${modelName}`, "success");
+          update(toastId, `已停止 ${modelName}`, "success");
         } else {
-          update(toastId, "Stop request failed", "error");
+          update(toastId, "停止请求失败", "error");
         }
       } catch {
-        update(toastId, "Network error", "error");
+        update(toastId, "网络错误", "error");
       }
 
       return;
     }
 
     onTestModels?.([modelId]);
-    const toastId = toast(`Testing ${modelName}...`, "loading");
+    const toastId = toast(`正在测试 ${modelName}...`, "loading");
 
     try {
       const response = await fetch("/api/detect", {
@@ -403,12 +403,12 @@ export function ChannelCard({
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to trigger model detection");
+        throw new Error(data.error || "启动模型检测失败");
       }
 
-      update(toastId, `Detection started for ${modelName}`, "success");
+      update(toastId, `已为 ${modelName} 启动检测`, "success");
     } catch {
-      update(toastId, `Failed to test ${modelName}`, "error");
+      update(toastId, `无法测试 ${modelName}`, "error");
     }
   };
 
@@ -427,7 +427,7 @@ export function ChannelCard({
             <div className="min-w-0 text-left">
               <h3 className="font-medium truncate">{channel.name}</h3>
               <p className="text-sm text-muted-foreground">
-                {channel.models.length} models
+                {channel.models.length} 个模型
               </p>
             </div>
           </div>
@@ -465,7 +465,7 @@ export function ChannelCard({
               "border-l border-border px-4 transition-colors",
               isChannelTesting && hoveringChannelStop ? "bg-rose-500/15" : "hover:bg-accent/40"
             )}
-            title={isChannelTesting ? "Stop channel detection" : "Test filtered models"}
+            title={isChannelTesting ? "停止渠道检测" : "测试筛选的模型"}
           >
             {isChannelTesting ? (
               hoveringChannelStop ? (
@@ -483,7 +483,7 @@ export function ChannelCard({
       {isExpanded && (
         <div className="p-3">
           <div className="mb-3 flex items-center justify-between text-xs text-muted-foreground">
-            <span>{displayedModels.length} shown</span>
+            <span>显示 {displayedModels.length} 个</span>
             {filterEndpoint && (
               <button
                 onClick={() => {
@@ -492,7 +492,7 @@ export function ChannelCard({
                 }}
                 className="text-primary hover:underline"
               >
-                Clear endpoint filter ({endpointLabel(filterEndpoint)})
+                清除端点筛选 ({endpointLabel(filterEndpoint)})
               </button>
             )}
           </div>

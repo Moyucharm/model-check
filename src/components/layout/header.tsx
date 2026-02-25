@@ -182,7 +182,7 @@ export function Header({
       const diffMs = nextRun.getTime() - now.getTime();
 
       if (diffMs <= 0) {
-        setCountdown("running...");
+        setCountdown("运行中...");
         return;
       }
 
@@ -214,7 +214,7 @@ export function Header({
 
     setIsDetecting(true);
     onDetectionStart?.();
-    const toastId = toast("Starting full detection...", "loading");
+    const toastId = toast("正在启动完整检测...", "loading");
 
     try {
       const response = await fetch("/api/detect", {
@@ -229,13 +229,13 @@ export function Header({
       const data = await response.json().catch(() => ({}));
 
       if (response.ok) {
-        update(toastId, data.message || "Detection started", "success");
+        update(toastId, data.message || "检测已启动", "success");
       } else {
-        update(toastId, data.error || "Failed to start detection", "error");
+        update(toastId, data.error || "启动检测失败", "error");
         onDetectionStop?.();
       }
     } catch {
-      update(toastId, "Network error", "error");
+      update(toastId, "网络错误", "error");
       onDetectionStop?.();
     } finally {
       setIsDetecting(false);
@@ -246,7 +246,7 @@ export function Header({
     if (isStopping || !token) return;
 
     setIsStopping(true);
-    const toastId = toast("Stopping detection...", "loading");
+    const toastId = toast("正在停止检测...", "loading");
 
     try {
       const response = await fetch("/api/detect", {
@@ -259,13 +259,13 @@ export function Header({
       const data = await response.json().catch(() => ({}));
 
       if (response.ok) {
-        update(toastId, data.message || "Detection stopped", "success");
+        update(toastId, data.message || "检测已停止", "success");
         onDetectionStop?.();
       } else {
-        update(toastId, data.error || "Failed to stop detection", "error");
+        update(toastId, data.error || "停止检测失败", "error");
       }
     } catch {
-      update(toastId, "Network error", "error");
+      update(toastId, "网络错误", "error");
     } finally {
       setIsStopping(false);
     }
@@ -280,7 +280,7 @@ export function Header({
         <div className="container mx-auto flex h-14 items-center justify-between px-2 sm:px-4 gap-2">
           <div className="flex items-center gap-2 shrink-0">
             <Activity className="h-5 w-5 text-primary" />
-            <span className="font-semibold hidden sm:inline">Model Check</span>
+            <span className="font-semibold hidden sm:inline">模型检测</span>
             {isAuthenticated && hasUpdate && latestVersion ? (
               <a
                 href="https://github.com/Moyucharm/model-check"
@@ -315,13 +315,13 @@ export function Header({
                 : "border-border bg-muted/50",
               isAuthenticated && "hover:bg-accent hover:border-primary/50 cursor-pointer"
             )}
-            title={isAuthenticated ? "Open scheduler settings" : "Scheduler status"}
+            title={isAuthenticated ? "打开调度器设置" : "调度器状态"}
           >
             <span className="inline-flex items-center gap-1 py-1.5">
               <Clock className={cn("h-3.5 w-3.5", schedulerStatus?.detection.enabled === false ? "text-rose-500" : "text-blue-500")} />
-              <span className="font-medium text-foreground text-xs">{schedulerStatus ? (schedulerStatus.detection.enabled ? countdown : "disabled") : "-"}</span>
+              <span className="font-medium text-foreground text-xs">{schedulerStatus ? (schedulerStatus.detection.enabled ? countdown : "已禁用") : "-"}</span>
             </span>
-            <span className="hidden sm:inline-flex items-center gap-1 py-1.5" title="Global concurrency">
+            <span className="hidden sm:inline-flex items-center gap-1 py-1.5" title="全局并发">
               <Zap className="h-3.5 w-3.5 text-yellow-500" />
               <span className="font-medium text-foreground text-xs">{schedulerStatus?.config.maxGlobalConcurrency ?? "-"}</span>
             </span>
@@ -343,10 +343,10 @@ export function Header({
                       ? "bg-blue-500 text-white hover:bg-blue-600"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
-                  title="Filters"
+                  title="筛选"
                 >
                   <Filter className="h-4 w-4" />
-                  <span className="hidden sm:inline">Filter</span>
+                  <span className="hidden sm:inline">筛选</span>
                   {activeFilterCount > 0 && (
                     <span className="ml-0.5 px-1 py-0.5 text-xs rounded-full bg-white/20">
                       {activeFilterCount}
@@ -357,7 +357,7 @@ export function Header({
                 {showFilters && (
                   <div className="absolute right-0 top-full mt-2 w-72 p-4 rounded-lg border border-border bg-card shadow-lg z-50">
                     <div className="flex items-center justify-between mb-3">
-                      <span className="text-sm font-medium">Filters</span>
+                      <span className="text-sm font-medium">筛选</span>
                       <button onClick={() => setShowFilters(false)} className="p-1 rounded hover:bg-accent">
                         <X className="h-4 w-4" />
                       </button>
@@ -365,47 +365,47 @@ export function Header({
 
                     <div className="space-y-3">
                       <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">Search model</label>
+                        <label className="text-xs text-muted-foreground mb-1 block">搜索模型</label>
                         <div className="relative">
                           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                           <input
                             type="text"
                             value={search}
                             onChange={(e) => onSearchChange(e.target.value)}
-                            placeholder="Type model name..."
+                            placeholder="输入模型名称..."
                             className="w-full pl-8 pr-3 py-2 rounded-md border border-input bg-background text-sm"
                           />
                         </div>
                       </div>
 
                       <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">Endpoint</label>
+                        <label className="text-xs text-muted-foreground mb-1 block">端点</label>
                         <select
                           value={endpointFilter}
                           onChange={(e) => onEndpointFilterChange?.(e.target.value as EndpointFilter)}
                           className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
                         >
-                          <option value="all">All</option>
-                          <option value="CHAT">Chat</option>
+                          <option value="all">全部</option>
+                          <option value="CHAT">聊天</option>
                           <option value="CLAUDE">Claude CLI</option>
                           <option value="GEMINI">Gemini CLI</option>
                           <option value="CODEX">Codex CLI</option>
-                          <option value="IMAGE">Image</option>
+                          <option value="IMAGE">图像</option>
                         </select>
                       </div>
 
                       <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">Status</label>
+                        <label className="text-xs text-muted-foreground mb-1 block">状态</label>
                         <select
                           value={statusFilter}
                           onChange={(e) => onStatusFilterChange?.(e.target.value as StatusFilter)}
                           className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
                         >
-                          <option value="all">All</option>
-                          <option value="healthy">Healthy</option>
-                          <option value="partial">Partial</option>
-                          <option value="unhealthy">Unhealthy</option>
-                          <option value="unknown">Unknown</option>
+                          <option value="all">全部</option>
+                          <option value="healthy">健康</option>
+                          <option value="partial">部分故障</option>
+                          <option value="unhealthy">故障</option>
+                          <option value="unknown">未知</option>
                         </select>
                       </div>
 
@@ -418,7 +418,7 @@ export function Header({
                           }}
                           className="w-full py-2 text-sm text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
                         >
-                          Clear all filters
+                          清除所有筛选
                         </button>
                       )}
                     </div>
@@ -427,14 +427,14 @@ export function Header({
               </div>
             )}
 
-            <div className="inline-flex items-center rounded-md border border-border bg-background p-0.5" title="View mode">
+            <div className="inline-flex items-center rounded-md border border-border bg-background p-0.5" title="查看模式">
               <button
                 onClick={() => onViewModeChange?.("list")}
                 className={cn(
                   "rounded px-1.5 py-1 text-xs transition-colors",
                   viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
                 )}
-                title="List view"
+                title="列表视图"
               >
                 <List className="h-4 w-4" />
               </button>
@@ -444,13 +444,13 @@ export function Header({
                   "rounded px-1.5 py-1 text-xs transition-colors",
                   viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
                 )}
-                title="Card view"
+                title="卡片视图"
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="flex items-center px-1 py-1 rounded-md text-sm" title={isConnected ? "SSE connected" : "SSE disconnected"}>
+            <div className="flex items-center px-1 py-1 rounded-md text-sm" title={isConnected ? "SSE 已连接" : "SSE 已断开"}>
               {isConnected ? (
                 <Wifi className="h-4 w-4 text-emerald-500" />
               ) : (
@@ -471,7 +471,7 @@ export function Header({
                       ? "bg-rose-500 text-white hover:bg-rose-600"
                       : "bg-blue-500 text-white"
                   )}
-                  title={isHoveringStop ? "Stop detection" : "Detection running"}
+                  title={isHoveringStop ? "停止检测" : "检测运行中"}
                 >
                   {isStopping ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -481,7 +481,7 @@ export function Header({
                     <Loader2 className="h-4 w-4 animate-spin" />
                   )}
                   <span className="hidden sm:inline">
-                    {isStopping ? "Stopping" : isHoveringStop ? "Stop" : "Running"}
+                    {isStopping ? "停止中" : isHoveringStop ? "停止" : "运行中"}
                   </span>
                 </button>
               ) : (
@@ -489,14 +489,14 @@ export function Header({
                   onClick={handleTriggerDetection}
                   disabled={isDetecting}
                   className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  title="Start full detection"
+                  title="启动完整检测"
                 >
                   {isDetecting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Play className="h-4 w-4" />
                   )}
-                  <span className="hidden sm:inline">{isDetecting ? "Starting" : "Detect"}</span>
+                  <span className="hidden sm:inline">{isDetecting ? "启动中" : "检测"}</span>
                 </button>
               )
             )}
@@ -504,7 +504,7 @@ export function Header({
             <button
               onClick={toggleTheme}
               className="inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-              title={resolvedTheme === "dark" ? "Switch to light" : "Switch to dark"}
+              title={resolvedTheme === "dark" ? "切换到浅色" : "切换到深色"}
             >
               {resolvedTheme === "dark" ? (
                 <Sun className="h-4 w-4" />
@@ -519,7 +519,7 @@ export function Header({
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
               >
                 <LogOut className="h-4 w-4" />
-                <span className="hidden sm:inline">Logout</span>
+                <span className="hidden sm:inline">登出</span>
               </button>
             ) : (
               <button
@@ -527,7 +527,7 @@ export function Header({
                 className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 <LogIn className="h-4 w-4" />
-                <span className="hidden sm:inline">Login</span>
+                <span className="hidden sm:inline">登录</span>
               </button>
             )}
           </div>

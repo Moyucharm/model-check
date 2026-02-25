@@ -148,7 +148,7 @@ export function Dashboard({
 
       const response = await fetch(`/api/dashboard?${params}`, { headers, signal });
       if (!response.ok) {
-        throw new Error("Failed to fetch dashboard data");
+        throw new Error("获取仪表板数据失败");
       }
 
       const result = await response.json();
@@ -161,7 +161,7 @@ export function Dashboard({
         return;
       }
       if (!signal?.aborted) {
-        setError(err instanceof Error ? err.message : "Unknown error");
+        setError(err instanceof Error ? err.message : "未知错误");
       }
     } finally {
       if (!signal?.aborted) {
@@ -173,7 +173,7 @@ export function Dashboard({
   const handleDeleteChannel = useCallback(async (channelId: string) => {
     if (!token) return;
 
-    const toastId = toast("Deleting channel...", "loading");
+    const toastId = toast("删除渠道中...", "loading");
     try {
       const response = await fetch(`/api/channel?id=${channelId}`, {
         method: "DELETE",
@@ -182,12 +182,12 @@ export function Dashboard({
         },
       });
       if (!response.ok) {
-        throw new Error("Failed to delete channel");
+        throw new Error("删除渠道失败");
       }
-      update(toastId, "Channel deleted", "success");
+      update(toastId, "渠道已删除", "success");
       fetchData(undefined, currentPage, search, endpointFilter, statusFilter);
     } catch (err) {
-      update(toastId, err instanceof Error ? err.message : "Delete failed", "error");
+      update(toastId, err instanceof Error ? err.message : "删除失败", "error");
     }
   }, [token, toast, update, fetchData, currentPage, search, endpointFilter, statusFilter]);
 
@@ -258,7 +258,7 @@ export function Dashboard({
           onClick={() => fetchData(undefined, currentPage)}
           className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
         >
-          Retry
+          重试
         </button>
       </div>
     );
@@ -279,7 +279,7 @@ export function Dashboard({
 
       {sortedChannels.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          {data.channels.length === 0 ? "No channels configured" : "No matching results"}
+          {data.channels.length === 0 ? "未配置渠道" : "无匹配结果"}
         </div>
       ) : (
         <div className="grid gap-4">
@@ -311,7 +311,7 @@ export function Dashboard({
             )}
           >
             <ChevronLeft className="h-4 w-4" />
-            Prev
+            上一页
           </button>
 
           <div className="flex items-center gap-1">
@@ -355,12 +355,12 @@ export function Dashboard({
                 : "text-foreground hover:bg-accent"
             )}
           >
-            Next
+            下一页
             <ChevronRight className="h-4 w-4" />
           </button>
 
           <span className="text-sm text-muted-foreground ml-4">
-            Page {currentPage} / {totalPages}, {pagination.totalChannels} channels
+            第 {currentPage} / {totalPages} 页，共 {pagination.totalChannels} 个渠道
           </span>
         </div>
       )}

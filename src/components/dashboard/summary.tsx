@@ -19,31 +19,31 @@ interface SummaryProps {
 export function Summary({ data, className }: SummaryProps) {
   const stats = [
     {
-      label: "Channels",
+      label: "渠道总数",
       value: data.totalChannels,
       icon: Server,
       color: "text-blue-500",
     },
     {
-      label: "Models",
+      label: "模型总数",
       value: data.totalModels,
       icon: Activity,
       color: "text-violet-500",
     },
     {
-      label: "Healthy",
+      label: "健康",
       value: data.healthyModels,
       icon: CheckCircle,
       color: "text-emerald-500",
     },
     {
-      label: "Partial",
+      label: "部分故障",
       value: data.partialModels ?? 0,
       icon: AlertTriangle,
       color: "text-amber-500",
     },
     {
-      label: "Health Rate",
+      label: "健康率",
       value: `${data.healthRate}%`,
       icon: Percent,
       color: data.healthRate >= 80 ? "text-emerald-500" : data.healthRate >= 50 ? "text-amber-500" : "text-rose-500",
