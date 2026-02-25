@@ -386,11 +386,11 @@ export function Header({
                           className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
                         >
                           <option value="all">全部</option>
-                          <option value="CHAT">聊天</option>
+                          <option value="CHAT">Chat</option>
                           <option value="CLAUDE">Claude CLI</option>
                           <option value="GEMINI">Gemini CLI</option>
                           <option value="CODEX">Codex CLI</option>
-                          <option value="IMAGE">图像</option>
+                          <option value="IMAGE">Image</option>
                         </select>
                       </div>
 

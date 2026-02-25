@@ -79,11 +79,11 @@ const ENDPOINT_META: Record<
     base: string;
   }
 > = {
-  CHAT: { label: "聊天", base: "blue" },
+  CHAT: { label: "Chat", base: "blue" },
   CLAUDE: { label: "Claude CLI", base: "orange" },
   GEMINI: { label: "Gemini CLI", base: "cyan" },
   CODEX: { label: "Codex CLI", base: "violet" },
-  IMAGE: { label: "图像", base: "pink" },
+  IMAGE: { label: "Image", base: "pink" },
 };
 
 function endpointLabel(type: string): string {
@@ -430,23 +430,22 @@ export function ChannelCard({
                 {channel.models.length} 个模型
               </p>
             </div>
-          </div>
-
-          <div className="hidden sm:flex items-center gap-2">
-            {Object.entries(endpointCounts).map(([endpoint, count]) => (
-              <button
-                key={endpoint}
-                onClick={(event) => handleEndpointClick(endpoint, event)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                  filterEndpoint === endpoint
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background text-foreground border-border hover:bg-accent"
-                )}
-              >
-                {endpointLabel(endpoint)}: {count}
-              </button>
-            ))}
+            <div className="hidden sm:flex items-center gap-2">
+              {Object.entries(endpointCounts).map(([endpoint, count]) => (
+                <button
+                  key={endpoint}
+                  onClick={(event) => handleEndpointClick(endpoint, event)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                    filterEndpoint === endpoint
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background text-foreground border-border hover:bg-accent"
+                  )}
+                >
+                  {endpointLabel(endpoint)}: {count}
+                </button>
+              ))}
+            </div>
           </div>
 
           {isExpanded ? (
