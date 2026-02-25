@@ -19,8 +19,9 @@ services:
       - NODE_ENV=production
       - DATABASE_URL=${DOCKER_DATABASE_URL:-file:/app/data/model-check.db}
       - REDIS_URL=${DOCKER_REDIS_URL:-}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?❌ ADMIN_PASSWORD is required. Set it in .env or environment.}
+      - JWT_SECRET=${JWT_SECRET:?❌ JWT_SECRET is required. Set it in .env or environment.}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - AUTO_DETECT_ENABLED=${AUTO_DETECT_ENABLED:-false}
       - DETECT_PROMPT=${DETECT_PROMPT:-1+1=2? yes or no}
       - GLOBAL_PROXY=${GLOBAL_PROXY:-}
