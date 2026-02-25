@@ -4,6 +4,37 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth } from "@/lib/middleware/auth";
 
+function readTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/$/, "");
+}
+
+function normalizeKeyMode(value: unknown): "single" | "multi" {
+  return value === "multi" ? "multi" : "single";
+}
+
+function parseKeysText(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  const dedup = new Set(
+    value
+      .split(/[,\n]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  );
+  return Array.from(dedup);
+}
+
+function buildExtraKeys(mainApiKey: string, keysValue: unknown): string[] {
+  const parsed = parseKeysText(keysValue);
+  if (parsed.length === 0) return [];
+  return parsed.filter((key) => key !== mainApiKey);
+}
+
 // GET /api/channel - List all channels (authenticated)
 export async function GET(request: NextRequest) {
   const authError = requireAuth(request);
@@ -25,14 +56,13 @@ export async function GET(request: NextRequest) {
       ],
     });
 
-    // Mask API keys for security
-    const maskedChannels = channels.map((ch) => ({
-      ...ch,
-      apiKey: ch.apiKey.slice(0, 8) + "..." + ch.apiKey.slice(-4),
+    const maskedChannels = channels.map((channel) => ({
+      ...channel,
+      apiKey: channel.apiKey.slice(0, 8) + "..." + channel.apiKey.slice(-4),
     }));
 
     return NextResponse.json({ channels: maskedChannels });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to fetch channels", code: "FETCH_ERROR" },
       { status: 500 }
@@ -46,18 +76,22 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const body = await request.json();
-    const { name, baseUrl, apiKey, proxy, models, keyMode = "single", keys } = body;
+    const body = await request.json() as Record<string, unknown>;
 
-    // Validate required fields
-    if (!name || !baseUrl || !apiKey) {
+    const name = readTrimmedString(body.name);
+    const baseUrlRaw = readTrimmedString(body.baseUrl);
+    const apiKeyRaw = readTrimmedString(body.apiKey);
+    const keysFromText = parseKeysText(body.keys);
+    const apiKey = apiKeyRaw ?? keysFromText[0];
+    const keyMode = normalizeKeyMode(body.keyMode);
+
+    if (!name || !baseUrlRaw || !apiKey) {
       return NextResponse.json(
         { error: "Name, baseUrl, and apiKey are required", code: "MISSING_FIELDS" },
         { status: 400 }
       );
     }
 
-    // Check for duplicate channel name
     const existingByName = await prisma.channel.findFirst({
       where: { name },
       select: { id: true },
@@ -69,7 +103,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create channel at first position (new channel appears as list item #1)
+    const proxy = readTrimmedString(body.proxy) ?? null;
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrlRaw);
+
     const channel = await prisma.$transaction(async (tx) => {
       const minSort = await tx.channel.aggregate({
         _min: { sortOrder: true },
@@ -80,9 +116,9 @@ export async function POST(request: NextRequest) {
       return tx.channel.create({
         data: {
           name,
-          baseUrl: baseUrl.replace(/\/$/, ""), // Remove trailing slash
+          baseUrl: normalizedBaseUrl,
           apiKey,
-          proxy: proxy || null,
+          proxy,
           enabled: true,
           sortOrder: nextSortOrder,
           keyMode,
@@ -90,37 +126,36 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    // Create channel keys for multi-key mode (skip first key, already saved as main apiKey)
-    if (keyMode === "multi" && keys && typeof keys === "string") {
-      const keyList = keys.split(/[,\n]/).map((k: string) => k.trim()).filter(Boolean);
-      const extraKeys = keyList.slice(1);
+    if (keyMode === "multi") {
+      const extraKeys = buildExtraKeys(apiKey, body.keys);
       if (extraKeys.length > 0) {
         await prisma.channelKey.createMany({
-          data: extraKeys.map((k: string) => ({
+          data: extraKeys.map((key) => ({
             channelId: channel.id,
-            apiKey: k,
+            apiKey: key,
           })),
         });
       }
     }
 
-    // If models are provided, create them directly (status fields are initialized by defaults)
-    if (models && Array.isArray(models) && models.length > 0) {
+    if (Array.isArray(body.models) && body.models.length > 0) {
       const uniqueModels = Array.from(
         new Set(
-          models
-            .map((modelName: string) => modelName.trim())
+          body.models
+            .filter((model): model is string => typeof model === "string")
+            .map((modelName) => modelName.trim())
             .filter(Boolean)
         )
       );
 
-      await prisma.model.createMany({
-        data: uniqueModels.map((modelName: string) => ({
-          channelId: channel.id,
-          modelName,
-        })),
-        skipDuplicates: true,
-      });
+      if (uniqueModels.length > 0) {
+        await prisma.model.createMany({
+          data: uniqueModels.map((modelName) => ({
+            channelId: channel.id,
+            modelName,
+          })),
+        });
+      }
     }
 
     return NextResponse.json({
@@ -130,7 +165,7 @@ export async function POST(request: NextRequest) {
         apiKey: channel.apiKey.slice(0, 8) + "...",
       },
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to create channel", code: "CREATE_ERROR" },
       { status: 500 }
@@ -144,14 +179,19 @@ export async function PUT(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const body = await request.json();
-    const { id, name, baseUrl, apiKey, proxy, enabled, orders, keyMode, keys } = body;
+    const body = await request.json() as Record<string, unknown>;
+    const id = readTrimmedString(body.id);
 
-    // Batch update channel sort order
-    if (Array.isArray(orders)) {
+    if (Array.isArray(body.orders)) {
       await prisma.$transaction(
-        orders
-          .filter((item) => item && typeof item.id === "string" && typeof item.sortOrder === "number")
+        body.orders
+          .filter(
+            (item): item is { id: string; sortOrder: number } =>
+              typeof item === "object"
+              && item !== null
+              && typeof (item as { id?: unknown }).id === "string"
+              && typeof (item as { sortOrder?: unknown }).sortOrder === "number"
+          )
           .map((item) =>
             prisma.channel.update({
               where: { id: item.id },
@@ -170,8 +210,25 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Check for duplicate channel name when renaming
-    if (name !== undefined) {
+    const name = body.name === undefined ? undefined : readTrimmedString(body.name);
+    const baseUrl = body.baseUrl === undefined
+      ? undefined
+      : readTrimmedString(body.baseUrl);
+    const apiKeyFromBody = body.apiKey === undefined
+      ? undefined
+      : readTrimmedString(body.apiKey);
+    const keyMode = body.keyMode === undefined
+      ? undefined
+      : normalizeKeyMode(body.keyMode);
+
+    if (body.name !== undefined && !name) {
+      return NextResponse.json(
+        { error: "Channel name cannot be empty", code: "INVALID_NAME" },
+        { status: 400 }
+      );
+    }
+
+    if (name) {
       const existingByName = await prisma.channel.findFirst({
         where: { name, id: { not: id } },
         select: { id: true },
@@ -184,13 +241,15 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Build update data
+    const keysFromText = parseKeysText(body.keys);
+    const inferredApiKey = apiKeyFromBody ?? (keysFromText.length > 0 ? keysFromText[0] : undefined);
+
     const updateData: Record<string, unknown> = {};
     if (name !== undefined) updateData.name = name;
-    if (baseUrl !== undefined) updateData.baseUrl = baseUrl.replace(/\/$/, "");
-    if (apiKey !== undefined) updateData.apiKey = apiKey;
-    if (proxy !== undefined) updateData.proxy = proxy || null;
-    if (enabled !== undefined) updateData.enabled = Boolean(enabled);
+    if (baseUrl !== undefined) updateData.baseUrl = normalizeBaseUrl(baseUrl);
+    if (inferredApiKey !== undefined) updateData.apiKey = inferredApiKey;
+    if (body.proxy !== undefined) updateData.proxy = readTrimmedString(body.proxy) ?? null;
+    if (body.enabled !== undefined) updateData.enabled = Boolean(body.enabled);
     if (keyMode !== undefined) updateData.keyMode = keyMode;
 
     const channel = await prisma.$transaction(async (tx) => {
@@ -199,22 +258,19 @@ export async function PUT(request: NextRequest) {
         data: updateData,
       });
 
-      // Update keys for multi-key mode
-      if (keyMode === "multi" && keys !== undefined && typeof keys === "string") {
+      if (keyMode === "multi" && body.keys !== undefined) {
         await tx.channelKey.deleteMany({ where: { channelId: id } });
-        // Parse and create new keys, skip first key (already saved as main apiKey)
-        const keyList = keys.split(/[,\n]/).map((k: string) => k.trim()).filter(Boolean);
-        const extraKeys = keyList.slice(1);
+        const mainApiKey = inferredApiKey ?? updatedChannel.apiKey;
+        const extraKeys = buildExtraKeys(mainApiKey, body.keys);
         if (extraKeys.length > 0) {
           await tx.channelKey.createMany({
-            data: extraKeys.map((k: string) => ({
+            data: extraKeys.map((key) => ({
               channelId: id,
-              apiKey: k,
+              apiKey: key,
             })),
           });
         }
       } else if (keyMode === "single") {
-        // Switching to single mode should clear stale extra keys.
         await tx.channelKey.deleteMany({ where: { channelId: id } });
       }
 
@@ -228,7 +284,7 @@ export async function PUT(request: NextRequest) {
         apiKey: channel.apiKey.slice(0, 8) + "...",
       },
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to update channel", code: "UPDATE_ERROR" },
       { status: 500 }
@@ -252,7 +308,6 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    // Get channel info before deletion (for WebDAV sync)
     const channel = await prisma.channel.findUnique({
       where: { id },
       select: { id: true },
@@ -270,7 +325,7 @@ export async function DELETE(request: NextRequest) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to delete channel", code: "DELETE_ERROR" },
       { status: 500 }
