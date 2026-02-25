@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   X,
   Loader2,
@@ -53,12 +53,16 @@ export function ModelFilterModal({
   const [fetchDone, setFetchDone] = useState(false);
 
   const [channelData, setChannelData] = useState<Map<string, ChannelModelData>>(new Map());
+  // Keep a ref in sync so async callbacks always read the latest data
+  const channelDataRef = useRef(channelData);
+  channelDataRef.current = channelData;
   const [collapsedLeft, setCollapsedLeft] = useState<Set<string>>(new Set());
   const [collapsedRight, setCollapsedRight] = useState<Set<string>>(new Set());
 
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [searchText, setSearchText] = useState("");
   const [selectedSearchText, setSelectedSearchText] = useState("");
+  const [manualModelName, setManualModelName] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -282,6 +286,39 @@ export function ModelFilterModal({
     });
   };
 
+  const handleAddManualModel = () => {
+    const modelName = manualModelName.trim();
+    if (!modelName) return;
+    if (isMultiChannel) {
+      toast("批量模式暂不支持手动添加模型", "error");
+      return;
+    }
+    const channelId = targetChannels[0]?.id;
+    if (!channelId) return;
+
+    setChannelData((prev) => {
+      const next = new Map(prev);
+      const current = next.get(channelId) ?? {
+        allModels: [],
+        selectedModels: new Set<string>(),
+        modelPairs: [] as Array<{ modelName: string; keyId: string | null }>,
+      };
+
+      const allModels = Array.from(new Set([...current.allModels, modelName])).sort();
+      const selectedModels = new Set(current.selectedModels);
+      selectedModels.add(modelName);
+
+      const modelPairs = current.modelPairs.some((pair) => pair.modelName === modelName)
+        ? current.modelPairs
+        : [...current.modelPairs, { modelName, keyId: null }];
+
+      next.set(channelId, { allModels, selectedModels, modelPairs });
+      return next;
+    });
+
+    setManualModelName("");
+  };
+
   // Collapse toggle
   const toggleCollapse = (side: "left" | "right", chId: string) => {
     const setter = side === "left" ? setCollapsedLeft : setCollapsedRight;
@@ -408,11 +445,17 @@ export function ModelFilterModal({
         const batch = targetChannels.slice(i, i + batchSize);
         const results = await Promise.allSettled(
           batch.map(async (ch) => {
-            const d = channelData.get(ch.id);
+            // Use ref to always read the latest channelData
+            const d = channelDataRef.current.get(ch.id);
             const selected = d ? Array.from(d.selectedModels) : [];
             const selectedModelPairs = d
               ? d.modelPairs.filter((pair) => d.selectedModels.has(pair.modelName))
               : [];
+
+            if (selected.length === 0) {
+              console.warn("[sync] No models selected for channel", ch.id, "channelData keys:", Array.from(channelDataRef.current.keys()));
+            }
+
             const res = await fetch(`/api/channel/${ch.id}/sync`, {
               method: "POST",
               headers,
@@ -421,7 +464,10 @@ export function ModelFilterModal({
                 selectedModelPairs,
               }),
             });
-            if (!res.ok) throw new Error();
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              throw new Error(errData.error || `sync failed (${res.status})`);
+            }
             const data = await res.json();
             return data.total || 0;
           })
@@ -439,6 +485,8 @@ export function ModelFilterModal({
             : `全量同步完成，保存了 ${totalSynced} 个模型`,
           failedCount > 0 ? "error" : "success"
         );
+      } else if (failedCount > 0) {
+        toast("同步失败，请查看控制台获取详细信息", "error");
       } else {
         toast(`同步完成，保存了 ${totalSynced} 个模型`, "success");
       }
@@ -738,6 +786,31 @@ export function ModelFilterModal({
                     全选
                   </button>
                 </div>
+                {!isMultiChannel && (
+                  <div className="flex items-center gap-2 mb-2 shrink-0">
+                    <input
+                      type="text"
+                      value={manualModelName}
+                      onChange={(e) => setManualModelName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddManualModel();
+                        }
+                      }}
+                      className="flex-1 px-3 py-1.5 rounded-md border border-input bg-background text-sm font-mono"
+                      placeholder="手动添加模型名..."
+                    />
+                    <button
+                      onClick={handleAddManualModel}
+                      disabled={!manualModelName.trim()}
+                      className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-md border border-input bg-background hover:bg-accent disabled:opacity-50 transition-colors"
+                      title="添加模型"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
                 <div className="flex-1 overflow-y-auto rounded-md border border-border" style={{ minHeight: "200px", maxHeight: "400px" }}>
                   {renderAvailableList()}
                 </div>

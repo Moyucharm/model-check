@@ -211,11 +211,13 @@ export async function triggerChannelDetection(
   const jobs = await buildJobsForModels(channel, modelsToTest);
 
   if (jobs.length === 0) {
+    console.log("[detect] no jobs built for channel", channelId);
     return { modelCount: 0, jobCount: 0, jobIds: [] };
   }
 
   const jobIds = await addDetectionJobsBulk(jobs);
   const { modelCount, jobCount } = getDetectionCounts(jobs);
+  console.log(`[detect] queued ${jobCount} jobs for ${modelCount} models, channel=${channelId}`);
 
   return { modelCount, jobCount, jobIds };
 }
@@ -350,7 +352,6 @@ export async function syncChannelModels(
       if (toCreate.length > 0) {
         const result = await prisma.model.createMany({
           data: toCreate,
-          skipDuplicates: true,
         });
         addedCount = result.count;
       }
@@ -392,7 +393,6 @@ export async function syncChannelModels(
     if (toCreate.length > 0) {
       const result = await prisma.model.createMany({
         data: toCreate,
-        skipDuplicates: true,
       });
       addedCount = result.count;
     }
@@ -566,7 +566,6 @@ export async function syncChannelModels(
   if (toCreate.length > 0) {
     const result = await prisma.model.createMany({
       data: toCreate,
-      skipDuplicates: true,
     });
     addedCount = result.count;
   }

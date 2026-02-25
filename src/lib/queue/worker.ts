@@ -1,4 +1,4 @@
-﻿// Detection worker for Redis(BullMQ) and in-memory queue modes.
+// Detection worker for Redis(BullMQ) and in-memory queue modes.
 
 import { Worker, Job } from "bullmq";
 import prisma from "@/lib/prisma";
@@ -36,19 +36,39 @@ const DEFAULT_WORKER_CONFIG: WorkerRuntimeConfig = {
   maxDelayMs: parseInt(process.env.DETECTION_MAX_DELAY_MS || "5000", 10),
 };
 
-let cachedConfig: WorkerRuntimeConfig | null = null;
-let cachedAt = 0;
-let loadingConfigPromise: Promise<WorkerRuntimeConfig> | null = null;
+// Persist worker state across HMR (same pattern as prisma.ts)
+interface WorkerState {
+  worker: Worker<DetectionJobData, DetectionResult> | null;
+  memoryWorkerRunning: boolean;
+  memoryTickTimer: NodeJS.Timeout | null;
+  memoryRunningJobs: Set<string>;
+  memoryChannelActiveCounts: Map<string, number>;
+  cachedConfig: WorkerRuntimeConfig | null;
+  cachedAt: number;
+  loadingConfigPromise: Promise<WorkerRuntimeConfig> | null;
+}
+
+const globalForWorker = globalThis as unknown as {
+  __workerState?: WorkerState;
+};
+
+if (!globalForWorker.__workerState) {
+  globalForWorker.__workerState = {
+    worker: null,
+    memoryWorkerRunning: false,
+    memoryTickTimer: null,
+    memoryRunningJobs: new Set<string>(),
+    memoryChannelActiveCounts: new Map<string, number>(),
+    cachedConfig: null,
+    cachedAt: 0,
+    loadingConfigPromise: null,
+  };
+}
+
+const ws = globalForWorker.__workerState;
 
 // Redis keys
 const GLOBAL_SEMAPHORE_KEY = "detection:semaphore:global";
-
-// Worker instances
-let worker: Worker<DetectionJobData, DetectionResult> | null = null;
-let memoryWorkerRunning = false;
-let memoryTickTimer: NodeJS.Timeout | null = null;
-const memoryRunningJobs = new Set<string>();
-const memoryChannelActiveCounts = new Map<string, number>();
 
 function parsePositiveInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -81,12 +101,12 @@ function normalizeConfig(config: Partial<WorkerRuntimeConfig>): WorkerRuntimeCon
 
 async function loadWorkerConfig(): Promise<WorkerRuntimeConfig> {
   const now = Date.now();
-  if (cachedConfig && now - cachedAt < CONFIG_CACHE_TTL_MS) {
-    return cachedConfig;
+  if (ws.cachedConfig && now - ws.cachedAt < CONFIG_CACHE_TTL_MS) {
+    return ws.cachedConfig;
   }
 
-  if (!loadingConfigPromise) {
-    loadingConfigPromise = (async () => {
+  if (!ws.loadingConfigPromise) {
+    ws.loadingConfigPromise = (async () => {
       try {
         const dbConfig = await prisma.schedulerConfig.findUnique({
           where: { id: "default" },
@@ -102,26 +122,26 @@ async function loadWorkerConfig(): Promise<WorkerRuntimeConfig> {
           ? normalizeConfig(dbConfig)
           : normalizeConfig(DEFAULT_WORKER_CONFIG);
 
-        cachedConfig = resolvedConfig;
-        cachedAt = Date.now();
+        ws.cachedConfig = resolvedConfig;
+        ws.cachedAt = Date.now();
         return resolvedConfig;
       } catch {
-        const fallbackConfig = cachedConfig ?? normalizeConfig(DEFAULT_WORKER_CONFIG);
-        cachedConfig = fallbackConfig;
-        cachedAt = Date.now();
+        const fallbackConfig = ws.cachedConfig ?? normalizeConfig(DEFAULT_WORKER_CONFIG);
+        ws.cachedConfig = fallbackConfig;
+        ws.cachedAt = Date.now();
         return fallbackConfig;
       } finally {
-        loadingConfigPromise = null;
+        ws.loadingConfigPromise = null;
       }
     })();
   }
 
-  return loadingConfigPromise;
+  return ws.loadingConfigPromise;
 }
 
 export function reloadWorkerConfig(): void {
-  cachedConfig = null;
-  cachedAt = 0;
+  ws.cachedConfig = null;
+  ws.cachedAt = 0;
 }
 
 function channelSemaphoreKey(channelId: string): string {
@@ -230,6 +250,8 @@ async function runDetectionPipeline(
       isModelComplete,
     });
 
+    console.log(`[worker] ${data.modelName}/${data.endpointType} → ${result.status} (${result.latency}ms)`);
+
     return result;
   } catch (error) {
     const failResult: DetectionResult = {
@@ -272,44 +294,45 @@ async function processRedisDetectionJob(
 }
 
 function getMemoryChannelActive(channelId: string): number {
-  return memoryChannelActiveCounts.get(channelId) || 0;
+  return ws.memoryChannelActiveCounts.get(channelId) || 0;
 }
 
 function increaseMemoryChannelActive(channelId: string): void {
   const current = getMemoryChannelActive(channelId);
-  memoryChannelActiveCounts.set(channelId, current + 1);
+  ws.memoryChannelActiveCounts.set(channelId, current + 1);
 }
 
 function decreaseMemoryChannelActive(channelId: string): void {
   const current = getMemoryChannelActive(channelId);
   if (current <= 1) {
-    memoryChannelActiveCounts.delete(channelId);
+    ws.memoryChannelActiveCounts.delete(channelId);
     return;
   }
-  memoryChannelActiveCounts.set(channelId, current - 1);
+  ws.memoryChannelActiveCounts.set(channelId, current - 1);
 }
 
 function scheduleMemoryTick(delayMs: number): void {
-  if (!memoryWorkerRunning) return;
+  if (!ws.memoryWorkerRunning) return;
 
-  if (memoryTickTimer) {
-    clearTimeout(memoryTickTimer);
+  if (ws.memoryTickTimer) {
+    clearTimeout(ws.memoryTickTimer);
   }
 
-  memoryTickTimer = setTimeout(() => {
+  ws.memoryTickTimer = setTimeout(() => {
     void processMemoryQueue();
   }, delayMs);
 }
 
 async function processMemoryQueue(): Promise<void> {
-  if (!memoryWorkerRunning) return;
+  if (!ws.memoryWorkerRunning) return;
 
   const runtimeConfig = await loadWorkerConfig();
   let launchedAnyJob = false;
+  let launchedCount = 0;
 
-  while (memoryRunningJobs.size < runtimeConfig.maxGlobalConcurrency) {
+  while (ws.memoryRunningJobs.size < runtimeConfig.maxGlobalConcurrency) {
     const nextJob = pullNextMemoryJob((job) => {
-      const globalCanTake = memoryRunningJobs.size < runtimeConfig.maxGlobalConcurrency;
+      const globalCanTake = ws.memoryRunningJobs.size < runtimeConfig.maxGlobalConcurrency;
       const channelCanTake = getMemoryChannelActive(job.channelId) < runtimeConfig.channelConcurrency;
       return globalCanTake && channelCanTake;
     });
@@ -319,7 +342,8 @@ async function processMemoryQueue(): Promise<void> {
     }
 
     launchedAnyJob = true;
-    memoryRunningJobs.add(nextJob.id);
+    launchedCount++;
+    ws.memoryRunningJobs.add(nextJob.id);
     increaseMemoryChannelActive(nextJob.data.channelId);
 
     void (async () => {
@@ -331,21 +355,25 @@ async function processMemoryQueue(): Promise<void> {
         success = false;
       } finally {
         completeMemoryJob(nextJob.id, success);
-        memoryRunningJobs.delete(nextJob.id);
+        ws.memoryRunningJobs.delete(nextJob.id);
         decreaseMemoryChannelActive(nextJob.data.channelId);
 
-        if (memoryWorkerRunning) {
+        if (ws.memoryWorkerRunning) {
           scheduleMemoryTick(0);
         }
       }
     })();
   }
 
-  if (!memoryWorkerRunning) {
+  if (!ws.memoryWorkerRunning) {
     return;
   }
 
-  const hasWork = hasPendingMemoryJobs() || memoryRunningJobs.size > 0;
+  if (launchedCount > 0) {
+    console.log(`[worker] launched ${launchedCount} jobs, running=${ws.memoryRunningJobs.size}`);
+  }
+
+  const hasWork = hasPendingMemoryJobs() || ws.memoryRunningJobs.size > 0;
   if (hasWork) {
     scheduleMemoryTick(launchedAnyJob ? 50 : 150);
   } else {
@@ -354,20 +382,20 @@ async function processMemoryQueue(): Promise<void> {
 }
 
 function startMemoryWorker(): void {
-  if (memoryWorkerRunning) {
+  if (ws.memoryWorkerRunning) {
     return;
   }
 
-  memoryWorkerRunning = true;
+  ws.memoryWorkerRunning = true;
   scheduleMemoryTick(0);
 }
 
 async function stopMemoryWorker(): Promise<void> {
-  memoryWorkerRunning = false;
+  ws.memoryWorkerRunning = false;
 
-  if (memoryTickTimer) {
-    clearTimeout(memoryTickTimer);
-    memoryTickTimer = null;
+  if (ws.memoryTickTimer) {
+    clearTimeout(ws.memoryTickTimer);
+    ws.memoryTickTimer = null;
   }
 }
 
@@ -376,11 +404,11 @@ async function stopMemoryWorker(): Promise<void> {
  */
 export function startWorker(): Worker<DetectionJobData, DetectionResult> | null {
   if (isRedisConfigured) {
-    if (worker) {
-      return worker;
+    if (ws.worker) {
+      return ws.worker;
     }
 
-    worker = new Worker<DetectionJobData, DetectionResult>(
+    ws.worker = new Worker<DetectionJobData, DetectionResult>(
       DETECTION_QUEUE_NAME,
       processRedisDetectionJob,
       {
@@ -389,11 +417,11 @@ export function startWorker(): Worker<DetectionJobData, DetectionResult> | null 
       }
     );
 
-    worker.on("error", () => {
+    ws.worker.on("error", () => {
       // Keep runtime stable; queue retries handle failures.
     });
 
-    return worker;
+    return ws.worker;
   }
 
   startMemoryWorker();
@@ -404,9 +432,9 @@ export function startWorker(): Worker<DetectionJobData, DetectionResult> | null 
  * Stop the detection worker
  */
 export async function stopWorker(): Promise<void> {
-  if (worker) {
-    await worker.close();
-    worker = null;
+  if (ws.worker) {
+    await ws.worker.close();
+    ws.worker = null;
   }
 
   await stopMemoryWorker();
@@ -416,6 +444,6 @@ export async function stopWorker(): Promise<void> {
  * Get worker status
  */
 export function isWorkerRunning(): boolean {
-  const redisWorkerRunning = worker !== null && !worker.closing;
-  return redisWorkerRunning || memoryWorkerRunning;
+  const redisWorkerRunning = ws.worker !== null && !ws.worker.closing;
+  return redisWorkerRunning || ws.memoryWorkerRunning;
 }

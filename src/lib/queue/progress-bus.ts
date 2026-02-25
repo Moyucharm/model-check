@@ -18,30 +18,48 @@ interface ProgressPayload extends DetectionProgressEvent {
   _source?: string;
 }
 
-const emitter = new EventEmitter();
-emitter.setMaxListeners(1000);
+// Persist EventEmitter across HMR (same pattern as prisma.ts)
+interface ProgressBusState {
+  emitter: EventEmitter;
+  sourceId: string;
+  subscriber: Redis | null;
+  subscriberInitPromise: Promise<void> | null;
+}
 
-const SOURCE_ID = `proc-${process.pid}-${Math.random().toString(36).slice(2)}`;
+const globalForProgressBus = globalThis as unknown as {
+  __progressBusState?: ProgressBusState;
+};
 
-let subscriber: Redis | null = null;
-let subscriberInitPromise: Promise<void> | null = null;
+if (!globalForProgressBus.__progressBusState) {
+  const emitter = new EventEmitter();
+  emitter.setMaxListeners(1000);
+
+  globalForProgressBus.__progressBusState = {
+    emitter,
+    sourceId: `proc-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    subscriber: null,
+    subscriberInitPromise: null,
+  };
+}
+
+const pbs = globalForProgressBus.__progressBusState;
 
 function emitProgress(event: DetectionProgressEvent): void {
-  emitter.emit("progress", event);
+  pbs.emitter.emit("progress", event);
 }
 
 async function ensureRedisSubscription(): Promise<void> {
   if (!isRedisConfigured) return;
-  if (subscriber) return;
-  if (subscriberInitPromise) return subscriberInitPromise;
+  if (pbs.subscriber) return;
+  if (pbs.subscriberInitPromise) return pbs.subscriberInitPromise;
 
-  subscriberInitPromise = (async () => {
+  pbs.subscriberInitPromise = (async () => {
     const sub = createRedisDuplicate("redis:progress-sub");
     sub.on("message", (channel, message) => {
       if (channel !== PROGRESS_CHANNEL) return;
       try {
         const payload = JSON.parse(message) as ProgressPayload;
-        if (payload._source === SOURCE_ID) return;
+        if (payload._source === pbs.sourceId) return;
         const { _source, ...event } = payload;
         emitProgress(event);
       } catch {
@@ -49,13 +67,13 @@ async function ensureRedisSubscription(): Promise<void> {
       }
     });
     await sub.subscribe(PROGRESS_CHANNEL);
-    subscriber = sub;
+    pbs.subscriber = sub;
   })()
     .finally(() => {
-      subscriberInitPromise = null;
+      pbs.subscriberInitPromise = null;
     });
 
-  return subscriberInitPromise;
+  return pbs.subscriberInitPromise;
 }
 
 export function subscribeProgress(
@@ -64,9 +82,9 @@ export function subscribeProgress(
   if (isRedisConfigured) {
     void ensureRedisSubscription();
   }
-  emitter.on("progress", listener);
+  pbs.emitter.on("progress", listener);
   return () => {
-    emitter.off("progress", listener);
+    pbs.emitter.off("progress", listener);
   };
 }
 
@@ -77,7 +95,7 @@ export async function publishProgress(event: DetectionProgressEvent): Promise<vo
 
   const payload: ProgressPayload = {
     ...event,
-    _source: SOURCE_ID,
+    _source: pbs.sourceId,
   };
 
   try {

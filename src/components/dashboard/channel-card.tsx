@@ -415,9 +415,12 @@ export function ChannelCard({
   return (
     <div className={cn("rounded-xl border border-border bg-card overflow-hidden", className)}>
       <div className="flex items-stretch min-w-0 border-b border-border/70">
-        <button
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setIsExpanded((v) => !v)}
-          className="flex-1 p-4 flex items-center justify-between gap-2 hover:bg-accent/40 transition-colors"
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsExpanded((v) => !v); } }}
+          className="flex-1 p-4 flex items-center justify-between gap-2 hover:bg-accent/40 transition-colors cursor-pointer"
         >
           <div className="min-w-0 flex items-center gap-3">
             <StatusIndicator status={currentChannelStatus} size="lg" pulse={currentChannelStatus !== "unknown"} />
@@ -451,7 +454,7 @@ export function ChannelCard({
           ) : (
             <ChevronDown className="h-5 w-5 text-muted-foreground" />
           )}
-        </button>
+        </div>
 
         {isAuthenticated && (
           <button

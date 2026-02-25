@@ -40,8 +40,10 @@ export async function POST(
           }))
           .filter((item: { modelName: string; keyId: string | null }) => item.modelName.trim().length > 0);
       }
+      console.log(`[sync] channel=${id} selectedModels=${selectedModels?.length ?? "undefined"} selectedModelPairs=${selectedModelPairs?.length ?? "undefined"}`);
     } catch {
       // No body or invalid JSON, use default behavior (fetch from API)
+      console.log(`[sync] channel=${id} body parse failed, falling back to API fetch`);
     }
 
     const result = await syncChannelModels(id, selectedModels, selectedModelPairs);
@@ -52,6 +54,7 @@ export async function POST(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to sync models";
+    console.error(`[sync] channel=${(await params).id} error:`, message);
     return NextResponse.json(
       { error: message, code: "SYNC_ERROR" },
       { status: 500 }

@@ -28,24 +28,47 @@ interface MemoryQueueJob {
   data: DetectionJobData;
 }
 
-const memoryJobs = new Map<string, MemoryJob>();
-const memoryWaitingIds: string[] = [];
-const memoryActiveIds = new Set<string>();
+// Persist in-memory queue state across HMR (same pattern as prisma.ts)
+interface MemoryQueueState {
+  jobs: Map<string, MemoryJob>;
+  waitingIds: string[];
+  activeIds: Set<string>;
+  completedCount: number;
+  failedCount: number;
+  stopped: boolean;
+  detectionQueue: Queue<DetectionJobData> | null;
+}
 
-let memoryCompletedCount = 0;
-let memoryFailedCount = 0;
-let memoryStopped = false;
+const globalForQueue = globalThis as unknown as {
+  __memoryQueueState?: MemoryQueueState;
+};
 
-// Queue instance (Redis/BullMQ mode)
-let detectionQueue: Queue<DetectionJobData> | null = null;
+if (!globalForQueue.__memoryQueueState) {
+  globalForQueue.__memoryQueueState = {
+    jobs: new Map<string, MemoryJob>(),
+    waitingIds: [],
+    activeIds: new Set<string>(),
+    completedCount: 0,
+    failedCount: 0,
+    stopped: false,
+    detectionQueue: null,
+  };
+}
+
+const queueState = globalForQueue.__memoryQueueState;
+
+// Aliases for backward compatibility with the rest of the module
+const memoryJobs = queueState.jobs;
+const memoryWaitingIds = queueState.waitingIds;
+const memoryActiveIds = queueState.activeIds;
 
 function getOrCreateRedisQueue(): Queue<DetectionJobData> {
   if (!isRedisConfigured) {
     throw new Error("Redis queue requested but REDIS_URL is not configured");
   }
 
-  if (!detectionQueue) {
-    detectionQueue = new Queue<DetectionJobData>(DETECTION_QUEUE_NAME, {
+  if (!queueState.detectionQueue) {
+    queueState.detectionQueue = new Queue<DetectionJobData>(DETECTION_QUEUE_NAME, {
       connection: getRedisClient(),
       defaultJobOptions: {
         attempts: 3,
@@ -65,13 +88,13 @@ function getOrCreateRedisQueue(): Queue<DetectionJobData> {
     });
   }
 
-  return detectionQueue;
+  return queueState.detectionQueue;
 }
 
 function resetMemoryCountersIfIdle(): void {
   if (memoryWaitingIds.length === 0 && memoryActiveIds.size === 0) {
-    memoryCompletedCount = 0;
-    memoryFailedCount = 0;
+    queueState.completedCount = 0;
+    queueState.failedCount = 0;
   }
 }
 
@@ -145,8 +168,8 @@ export async function getQueueStats(): Promise<QueueStats> {
     return {
       waiting: memoryWaitingIds.length,
       active: memoryActiveIds.size,
-      completed: memoryCompletedCount,
-      failed: memoryFailedCount,
+      completed: queueState.completedCount,
+      failed: queueState.failedCount,
       delayed: 0,
       total: memoryWaitingIds.length + memoryActiveIds.size,
     };
@@ -234,8 +257,8 @@ export async function clearQueue(): Promise<void> {
     memoryJobs.clear();
     memoryWaitingIds.length = 0;
     memoryActiveIds.clear();
-    memoryCompletedCount = 0;
-    memoryFailedCount = 0;
+    queueState.completedCount = 0;
+    queueState.failedCount = 0;
     return;
   }
 
@@ -245,7 +268,7 @@ export async function clearQueue(): Promise<void> {
 
 export async function pauseAndDrainQueue(): Promise<{ cleared: number }> {
   if (!isRedisConfigured) {
-    memoryStopped = true;
+    queueState.stopped = true;
     const cleared = memoryWaitingIds.length + memoryActiveIds.size;
     for (const id of memoryWaitingIds) {
       memoryJobs.delete(id);
@@ -301,7 +324,7 @@ export async function pauseAndDrainQueue(): Promise<{ cleared: number }> {
 
 export async function isDetectionStopped(): Promise<boolean> {
   if (!isRedisConfigured) {
-    return memoryStopped;
+    return queueState.stopped;
   }
 
   const value = await getRedisClient().get(DETECTION_STOPPED_KEY);
@@ -310,7 +333,7 @@ export async function isDetectionStopped(): Promise<boolean> {
 
 export async function clearStoppedFlag(): Promise<void> {
   if (!isRedisConfigured) {
-    memoryStopped = false;
+    queueState.stopped = false;
     return;
   }
 
@@ -324,7 +347,7 @@ export async function clearStoppedFlag(): Promise<void> {
 export function pullNextMemoryJob(
   canTake?: (job: DetectionJobData) => boolean
 ): MemoryQueueJob | null {
-  if (memoryStopped) return null;
+  if (queueState.stopped) return null;
 
   for (let i = 0; i < memoryWaitingIds.length; i += 1) {
     const id = memoryWaitingIds[i];
@@ -357,9 +380,9 @@ export function completeMemoryJob(jobId: string, success: boolean): void {
   memoryJobs.delete(jobId);
 
   if (success) {
-    memoryCompletedCount += 1;
+    queueState.completedCount += 1;
   } else {
-    memoryFailedCount += 1;
+    queueState.failedCount += 1;
   }
 }
 
