@@ -1,46 +1,22 @@
-﻿# Model Check - Docker Compose Configuration
+# Model Check - Docker Compose Configuration
 # https://github.com/Moyucharm/model-check
 
 services:
   app:
     image: ${APP_IMAGE:-ghcr.io/moyucharm/model-check:latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: model-check
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-        required: false
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=${DOCKER_DATABASE_URL:-file:/app/data/model-check.db}
-      - REDIS_URL=${DOCKER_REDIS_URL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?❌ ADMIN_PASSWORD is required. Set it in .env or environment.}
       - JWT_SECRET=${JWT_SECRET:?❌ JWT_SECRET is required. Set it in .env or environment.}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - AUTO_DETECT_ENABLED=${AUTO_DETECT_ENABLED:-false}
-      - DETECT_PROMPT=${DETECT_PROMPT:-1+1=2? yes or no}
       - GLOBAL_PROXY=${GLOBAL_PROXY:-}
-      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 * * * *}
-      - CRON_TIMEZONE=${CRON_TIMEZONE:-Asia/Shanghai}
-      - CLEANUP_SCHEDULE=${CLEANUP_SCHEDULE:-0 2 * * *}
-      - LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS:-7}
-      - CHANNEL_CONCURRENCY=${CHANNEL_CONCURRENCY:-5}
-      - MAX_GLOBAL_CONCURRENCY=${MAX_GLOBAL_CONCURRENCY:-30}
-      - DETECTION_MIN_DELAY_MS=${DETECTION_MIN_DELAY_MS:-3000}
-      - DETECTION_MAX_DELAY_MS=${DETECTION_MAX_DELAY_MS:-5000}
-      - WEBDAV_URL=${WEBDAV_URL:-}
-      - WEBDAV_USERNAME=${WEBDAV_USERNAME:-}
-      - WEBDAV_PASSWORD=${WEBDAV_PASSWORD:-}
-      - WEBDAV_FILENAME=${WEBDAV_FILENAME:-}
     volumes:
       - ./data:/app/data
-    networks:
-      - model-check-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/status"]
       interval: 30s
@@ -48,24 +24,18 @@ services:
       retries: 3
       start_period: 60s
 
-  redis:
-    image: docker.m.daocloud.io/library/redis:7-alpine
-    container_name: model-check-redis
-    restart: always
-    profiles: ["redis"]
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - ./data/redis:/data
-    networks:
-      - model-check-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    command: redis-server --appendonly yes --stop-writes-on-bgsave-error no
-
-networks:
-  model-check-network:
-    driver: bridge
+  # redis:
+  #   image: docker.m.daocloud.io/library/redis:7-alpine
+  #   container_name: model-check-redis
+  #   restart: always
+  #   profiles: ["redis"]
+  #   ports:
+  #     - "${REDIS_PORT:-6379}:6379"
+  #   volumes:
+  #     - ./data/redis:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   command: redis-server --appendonly yes --stop-writes-on-bgsave-error no
