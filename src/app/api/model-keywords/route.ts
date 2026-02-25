@@ -67,7 +67,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const updateData: Record<string, unknown> = {};
+    const updateData: { keyword?: string; enabled?: boolean } = {};
     if (keyword !== undefined) updateData.keyword = String(keyword).trim();
     if (enabled !== undefined) updateData.enabled = Boolean(enabled);
 
