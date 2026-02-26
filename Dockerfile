@@ -71,6 +71,9 @@ COPY --from=builder /app/node_modules/bindings ./node_modules/bindings
 COPY --from=builder /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
 COPY --from=builder /app/node_modules/dotenv ./node_modules/dotenv
 
+# Create data directory for SQLite with proper ownership
+RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
+
 USER nextjs
 
 EXPOSE 3000
