@@ -6,16 +6,17 @@
 FROM docker.m.daocloud.io/library/node:22-alpine AS deps
 WORKDIR /app
 
-# Install dependencies for native modules
-RUN apk add --no-cache libc6-compat
+# Install dependencies for native module compilation
+RUN apk add --no-cache libc6-compat python3 make g++
 
 # Copy package files
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma/
 COPY prisma.config.ts ./
 
-# Install dependencies (skip postinstall, will run in builder stage)
-RUN npm ci --legacy-peer-deps --ignore-scripts
+# Install dependencies (allow better-sqlite3 native compilation)
+RUN npm ci --legacy-peer-deps --ignore-scripts \
+    && npm rebuild better-sqlite3
 
 # ========================================
 # Stage 2: Builder
@@ -65,6 +66,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy Prisma adapter runtime (required for Prisma v7 adapter pattern)
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
+COPY --from=builder /app/node_modules/bindings ./node_modules/bindings
+COPY --from=builder /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
+COPY --from=builder /app/node_modules/node-addon-api ./node_modules/node-addon-api
+COPY --from=builder /app/node_modules/prebuild-install ./node_modules/prebuild-install
 COPY --from=builder /app/node_modules/dotenv ./node_modules/dotenv
 
 USER nextjs
