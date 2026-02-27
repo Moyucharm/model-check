@@ -8,6 +8,23 @@ set -e
 
 DATA_DIR="/app/data"
 DB_FILE="${DATA_DIR}/model-check.db"
+PRISMA_BIN="/app/node_modules/.bin/prisma"
+PRISMA_CLI_JS="/app/node_modules/prisma/build/index.js"
+
+run_prisma_db_push() {
+  if [ -x "${PRISMA_BIN}" ]; then
+    su-exec nextjs "${PRISMA_BIN}" db push --skip-generate
+    return $?
+  fi
+
+  if [ -f "${PRISMA_CLI_JS}" ]; then
+    su-exec nextjs node "${PRISMA_CLI_JS}" db push --skip-generate
+    return $?
+  fi
+
+  echo "[Entrypoint] Error: Prisma CLI not found in image."
+  return 1
+}
 
 # --- 1. Ensure data directory has correct ownership ---
 mkdir -p "${DATA_DIR}"
@@ -16,12 +33,12 @@ chown nextjs:nodejs "${DATA_DIR}"
 # --- 2. Initialize / sync database schema ---
 if [ ! -f "${DB_FILE}" ]; then
   echo "[Entrypoint] Database not found, initializing schema..."
-  su-exec nextjs npx prisma db push --skip-generate 2>&1 || {
+  run_prisma_db_push 2>&1 || {
     echo "[Entrypoint] Warning: Schema init failed. App may not work correctly."
   }
 else
   echo "[Entrypoint] Database exists, syncing schema..."
-  su-exec nextjs npx prisma db push --skip-generate 2>&1 || {
+  run_prisma_db_push 2>&1 || {
     echo "[Entrypoint] Warning: Schema sync failed. Manual migration may be needed."
   }
 fi
