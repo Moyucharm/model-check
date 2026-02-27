@@ -27,7 +27,7 @@ run_as_app_user() {
 
 run_prisma_db_push() {
   if [ -f "${PRISMA_CLI_JS}" ]; then
-    run_as_app_user node "${PRISMA_CLI_JS}" db push --skip-generate
+    run_as_app_user node "${PRISMA_CLI_JS}" db push
     return $?
   fi
 
@@ -71,4 +71,8 @@ fi
 
 # --- 3. Start application as nextjs user ---
 log "Starting application..."
-exec run_as_app_user "$@"
+if [ -n "${RUN_AS}" ]; then
+  exec su-exec "${RUN_AS}" "$@"
+else
+  exec "$@"
+fi

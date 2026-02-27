@@ -64,13 +64,9 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy Prisma adapter runtime (required for Prisma v7 adapter pattern)
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
-COPY --from=builder /app/node_modules/bindings ./node_modules/bindings
-COPY --from=builder /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
-COPY --from=builder /app/node_modules/dotenv ./node_modules/dotenv
+# Copy full node_modules so Prisma CLI can run in entrypoint without
+# missing transitive dependencies (e.g. valibot).
+COPY --from=builder /app/node_modules ./node_modules
 
 # Create data directory for SQLite with proper ownership
 RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
