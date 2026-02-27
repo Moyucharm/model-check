@@ -8,15 +8,9 @@ set -e
 
 DATA_DIR="/app/data"
 DB_FILE="${DATA_DIR}/model-check.db"
-PRISMA_BIN="/app/node_modules/.bin/prisma"
 PRISMA_CLI_JS="/app/node_modules/prisma/build/index.js"
 
 run_prisma_db_push() {
-  if [ -x "${PRISMA_BIN}" ]; then
-    su-exec nextjs "${PRISMA_BIN}" db push --skip-generate
-    return $?
-  fi
-
   if [ -f "${PRISMA_CLI_JS}" ]; then
     su-exec nextjs node "${PRISMA_CLI_JS}" db push --skip-generate
     return $?
