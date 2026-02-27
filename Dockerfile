@@ -49,9 +49,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Create non-root user + install su-exec for entrypoint user switching
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs \
+    && apk add --no-cache su-exec
 
 # Copy necessary files from builder
 COPY --from=builder /app/public ./public
@@ -74,7 +75,12 @@ COPY --from=builder /app/node_modules/dotenv ./node_modules/dotenv
 # Create data directory for SQLite with proper ownership
 RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
 
-USER nextjs
+# Copy entrypoint script (handles permissions + DB schema init)
+COPY docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# NOTE: Don't set USER here — entrypoint runs as root first,
+# then switches to nextjs via su-exec
 
 EXPOSE 3000
 
@@ -85,4 +91,5 @@ ENV HOSTNAME="0.0.0.0"
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/status || exit 1
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
